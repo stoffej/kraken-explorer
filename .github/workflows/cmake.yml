@@ -193,7 +193,7 @@ jobs:
         path: "Kraken*.AppImage"
 
   windows:
-    name: Windows (MinGW-w64) tests + zip
+    name: Windows (MinGW-w64) tests + zip + installer
     runs-on: windows-latest
 
     steps:
@@ -217,7 +217,13 @@ jobs:
           mingw-w64-ucrt-x86_64-cmake
           mingw-w64-ucrt-x86_64-ninja
 
-    - name: Build zip
+    # build_win_zip.ps1 builds the setup.exe when it finds Inno Setup.
+    - name: Set up Inno Setup
+      shell: pwsh
+      run: |
+        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+    - name: Build zip and installer
       shell: pwsh
       env:
         # Tests on: the same build tree runs ctest below.
@@ -226,6 +232,7 @@ jobs:
         $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
         g++ --version
         scripts\build_win_zip.ps1 -Build build
+        if (-not (Test-Path build\kraken-explorer-*-win64-setup.exe)) { throw "no setup.exe built" }
 
     - name: Build and run tests
       shell: pwsh
@@ -239,6 +246,13 @@ jobs:
       with:
         name: KrakenExplorer-Windows-zip
         path: "build/kraken-explorer-*-win64.zip"
+
+    - name: Upload installer
+      uses: actions/upload-artifact@v6
+      with:
+        name: KrakenExplorer-Windows-setup
+        path: "build/kraken-explorer-*-win64-setup.exe"
+        if-no-files-found: error
 
   release:
     name: Draft release

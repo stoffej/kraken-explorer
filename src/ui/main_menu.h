@@ -39,9 +39,11 @@ enum class Command
     NewReplayView,
     NewLinControl,
     NewInstrumentPanel,
+    NewWatchWindow,
     NewDbcEditor,
     StandaloneGraph,
     ConditionalLogging,
+    Macros,     // Measurement > Macros..., ui/macros
     FindSignal, // Ctrl+P palette, handled by ui/graph
     Convert,    // File > Convert..., ui/convert
     About,
@@ -75,9 +77,16 @@ struct MainMenu
 // "Ctrl+Shift+T" <-> chord. chord_parse: 0 for "None"/empty, -1 for text it does not understand.
 [[nodiscard]] std::string chord_name(int chord);
 [[nodiscard]] int chord_parse(std::string_view text);
+// Recording a chord (Settings > Shortcuts, Macros): the chord pressed this frame (0 for Backspace =
+// none), chord_capture_cancelled for Esc, chord_capture_waiting while no key came.
+inline constexpr int chord_capture_waiting = -1;
+inline constexpr int chord_capture_cancelled = -2;
+[[nodiscard]] int chord_capture();
 // The command whose menu label (without any "##" suffix) is `label`, Command::Count when none.
 [[nodiscard]] Command command_by_label(std::string_view label) noexcept;
 
+// Triggers cmd as its menu item does; nothing when the command is disabled now (a macro step).
+void menu_run(App& app, Command cmd);
 // Returns true once if cmd was triggered this frame.
 [[nodiscard]] bool menu_take(MainMenu& menu, Command cmd) noexcept;
 

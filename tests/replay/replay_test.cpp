@@ -405,6 +405,78 @@ TEST_CASE("as fast as possible skips the file's timing and batches trace-only fr
 namespace
 {
 
+// The player is at `position`, paused there (or finished when `running` is false).
+bool wait_for_player(const Replay& r, std::size_t position, bool running = true)
+{
+    for (int t = 0; t < 500; ++t)
+    {
+        if (r.position == position && (running ? r.hold == replay_paused : !r.running))
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("a breakpoint on an id pauses before its frames; step and continue go on from there")
+{
+    App app;
+    Replay r;
+    load_candump(app, r, "(0.0) x 1#01\n(0.1) x 2#02\n(0.2) x 1#03\n(0.3) x 2#04\n", "replay_break");
+    r.mapping = {replay_trace_only};
+    r.fast = true;
+    REQUIRE(r.data.rows.size() == 2);
+    r.data.rows[1].brk = true; // id 2
+    std::deque<Iface> ifaces;
+    Tasks tasks;
+    replay_start(r, ifaces, tasks);
+    REQUIRE(wait_for_player(r, 1)); // 1#01 played, held before 2#02
+    CHECK(r.running);
+    replay_single_step(r);
+    REQUIRE(wait_for_player(r, 2)); // the breakpoint's own frame, nothing more
+    replay_resume(r);
+    REQUIRE(wait_for_player(r, 3)); // 1#03, then the next frame of id 2
+    replay_resume(r);
+    REQUIRE(wait_for_player(r, 4, false));
+    replay_stop(r);
+    tasks_drain(tasks, app);
+    CHECK(trace_size(app.trace) == 4);
+}
+
+TEST_CASE("a breakpoint by time, a step from stopped, and stop while paused")
+{
+    App app;
+    Replay r;
+    load_candump(app, r, "(5.0) x 1#01\n(5.1) x 1#02\n(5.2) x 1#03\n(65.0) x 1#04\n", "replay_break_at");
+    r.mapping = {replay_trace_only};
+    r.break_at = "junk, 0.15, 1:00";
+    std::deque<Iface> ifaces;
+    Tasks tasks;
+    replay_start(r, ifaces, tasks);
+    REQUIRE(r.play_breaks == std::vector<std::size_t>{2, 3}); // the first frame at or after each time
+    REQUIRE(wait_for_player(r, 2)); // with the file's timing: 0.1 s in
+    replay_pause(r); // already paused: no effect
+    replay_resume(r);
+    REQUIRE(wait_for_player(r, 3)); // held at 1:00 without waiting for it: a breakpoint is checked before the wait
+    const auto t = std::chrono::steady_clock::now();
+    replay_stop(r);
+    CHECK(std::chrono::steady_clock::now() - t < std::chrono::milliseconds(500));
+    CHECK(!r.running);
+
+    r.break_at.clear();
+    replay_start(r, ifaces, tasks, replay_stepping);
+    REQUIRE(wait_for_player(r, 1));
+    replay_single_step(r);
+    REQUIRE(wait_for_player(r, 2)); // at once, not after the file's 0.1 s
+    replay_stop(r);
+}
+
+namespace
+{
+
 // 300k candump lines on two channels, in a temp file; returns the text too.
 std::string write_big_candump(const std::filesystem::path& path)
 {

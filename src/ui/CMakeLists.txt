@@ -31,7 +31,7 @@ set(ICON_SVGS # Lucide (ISC), same order as enum class Icon in ui/icons.h
     icons/play.svg icons/square.svg icons/settings-2.svg icons/refresh-cw.svg
     icons/chart-line.svg icons/filter.svg icons/folder.svg icons/file.svg
     icons/arrow-up.svg icons/house.svg icons/circle-dot.svg icons/history.svg
-    icons/database.svg icons/arrow-right-left.svg)
+    icons/database.svg icons/arrow-right-left.svg icons/pause.svg icons/step-forward.svg)
 set(icon_inc "const char* const icon_svgs[] = {\n")
 foreach(svg IN LISTS ICON_SVGS)
     file(READ ${icon_dir}/${svg} svg_text)
@@ -47,5 +47,8 @@ file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icons/kraken_svg.inc
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${icon_dir}/kraken.svg)
 target_include_directories(kraken_ui PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/icons)
 target_link_libraries(kraken_ui PRIVATE nanosvg)
+if(WIN32)
+    target_link_libraries(kraken_ui PRIVATE dwmapi) # ui/theme.cpp: dark title bar
+endif()
 target_link_libraries(kraken_ui PRIVATE ZLIB::ZLIB) # ui/replay.cpp: BLF log containers
 target_link_libraries(kraken_ui PUBLIC kraken_python) # ui/script_window.cpp: python_run & co

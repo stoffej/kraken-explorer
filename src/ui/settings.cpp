@@ -282,11 +282,19 @@ void workspace_xml(const App& app, pugi::xml_document& doc)
         {
             instrument_panel_save_xml(ip->second, app.ifaces, el.append_child("instrumentpanel"));
         }
+        if (const auto ww = app.watch_windows.find(tab.uid); ww != app.watch_windows.end() && ww->second.open)
+        {
+            watch_save_xml(ww->second, el.append_child("watchwindow"));
+        }
         if (const auto tw = app.trace_windows.find(tab.uid); tw != app.trace_windows.end())
         {
             trace_window_save_xml(tw->second, app.ifaces, el.append_child("tracewindow"));
         }
         graph_save_xml(tab.graphs, app.ifaces, el);
+    }
+    if (!app.macros.items.empty())
+    {
+        macros_save_xml(app.macros, app.ifaces, root.append_child("macros"));
     }
     pugi::xml_node setup = root.append_child("setup");
     setup_save_xml(app.setup, setup);
@@ -357,6 +365,7 @@ bool workspace_load(App& app, const std::string& path)
     app.tx_generators.clear(); // joins their sender threads
     app.lin_controls.clear();
     app.instrument_panels.clear();
+    app.watch_windows.clear();
     app.trace_windows.clear(); // the views rebuild from the trace
     const unsigned next_uid = ws.next_uid;
     for (const pugi::xml_node el : root.child("tabs").children("tab"))
@@ -385,10 +394,17 @@ bool workspace_load(App& app, const std::string& path)
             panel.open = true;
             instrument_panel_load_xml(panel, app.ifaces, ip);
         }
+        if (const pugi::xml_node ww = el.child("watchwindow"); ww)
+        {
+            WatchWindow& watch = app.watch_windows[tab.uid];
+            watch.open = true;
+            watch_load_xml(watch, ww);
+        }
     }
     ws.next_uid = std::max(ws.next_uid, next_uid);
     ws.current = 0;
     // The dock nodes are cleared and rebuilt from here; tabs without a node get the default layout.
+    macros_load_xml(app.macros, app.ifaces, root.child("macros"));
     if (const pugi::xml_node layout = root.child("layout"); layout)
     {
         const std::string ini = settings_strip_ini(layout.text().get());

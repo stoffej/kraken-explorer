@@ -19,6 +19,7 @@
 #include "ui/dbc_editor.h"
 #include "ui/lin_control.h"
 #include "ui/log_window.h"
+#include "ui/macros.h"
 #include "ui/instrument_panel.h"
 #include "ui/main_menu.h"
 #include "ui/convert.h"
@@ -34,6 +35,7 @@
 #include "ui/theme.h"
 #include "ui/tx_generator.h"
 #include "ui/value_search.h"
+#include "ui/watch_window.h"
 #include "ui/vim_nav.h"
 #include "ui/trace_window.h"
 #include "ui/workspace_tabs.h"
@@ -86,6 +88,8 @@ struct App
     std::optional<PngExport> png_export;
     std::map<unsigned, LinControl> lin_controls; // key: WorkspaceTab::uid
     std::map<unsigned, InstrumentPanel> instrument_panels; // key: WorkspaceTab::uid; after ifaces (sends on them)
+    std::map<unsigned, WatchWindow> watch_windows;         // key: WorkspaceTab::uid
+    Macros macros;                                         // of the workspace; after ifaces and tasks (their runs send and post)
     std::map<unsigned, DbcEditorState> dbc_editors;        // key: WorkspaceTab::uid; edits a copy of a DBC
     ConditionalLogging conditional_logging;  // fed from the trace every frame
     PyState python;                          // an RX consumer; one interpreter, one script at a time

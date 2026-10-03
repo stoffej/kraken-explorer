@@ -5,7 +5,8 @@ logs, graph, DBC editor, Replay, Python scripts, and live CAN through the adapte
 
 Status (2026-10-03): builds with MinGW-w64 GCC, all 56 ctest areas that run on Windows pass, the
 zip from `scripts/build_win_zip.ps1` installs and runs Python scripts without a Python install.
-Live CAN: PEAK sends through PCAN-Basic, the other adapters are untested on Windows. What is left is under "To do".
+Live CAN: PEAK sends through PCAN-Basic (classic CAN; CAN FD is written but untested), the other
+adapters are untested on Windows. What is left is under "To do".
 
 ## Build
 
@@ -43,36 +44,36 @@ copies the folder to `%LOCALAPPDATA%\Programs\Kraken Explorer` and adds a Start 
 user, no administrator rights; run it again to upgrade). The exe is not signed: SmartScreen warns
 on first run.
 
+With Inno Setup 6.3+ installed (`winget install JRSoftware.InnoSetup`) the script also builds
+`kraken-explorer-<version>-win64-setup.exe` from `packaging/windows/kraken-explorer.iss`: the same
+files as one installer, per user, with a Start menu entry and an uninstall entry in Windows' app
+list. CI builds both; pushing a tag `v<version>` (the version of `CMakeLists.txt`) attaches the
+zip, the setup.exe, the .deb and the AppImage to a draft release, which is published by hand on
+the releases page.
+
 ## To do
 
-Bugs found in the review of the port, most important first:
+Fixed from the review of the port: Kvaser timestamp wrap, the vcan / SocketCAN link buttons,
+cache replacement (unique names, retries), timer resolution while minimized, the UTF-8 manifest in
+the test binaries. Checked on the machine (WinLibs GCC 16.2): `system_clock`, and so `now_ns()`,
+steps in 100 ns, and `std::chrono::current_zone()` finds the zone (`Europe/Berlin`).
 
-1. **Kvaser timestamps wrap after 71.6 min** (`drivers/kvaser.cpp`): `unsigned long` is 32 bits on
-   Windows and the tick is 1 us. Unwrap in `kvaser_read`.
-2. **"New vcan" and the SocketCAN link buttons are still drawn** (`ui/can_status.cpp`,
-   `ui/setup_dialog.cpp`) and only give an `ip` error. Hide them on Windows.
-3. **Cache replacement** (`replace_cache`, `ui/frame_cache.cpp`): the old mapped cache is moved to
-   one fixed name, so a second rebuild of the same log in one process fails; no retry when
-   antivirus holds the new file for a moment.
-4. **Timer resolution** (`platform_win32.cpp`): `timeBeginPeriod(1)` is ignored by Windows 11 while
-   the window is minimized, cyclic TX and Replay then fall back to 15.6 ms.
-5. **UTF-8 only through the manifest**: the test binaries do not link it (a non-ASCII user name
-   breaks them), Windows before 10 1903 does not honour it.
-6. To check on the machine: resolution of `now_ns()` (system_clock on MinGW) for RX timestamps;
-   `std::chrono::current_zone()` without try/catch in log window, file dialog, recorder and
-   Replay.
+Left:
 
-Missing features:
-
-* **PEAK CAN FD**: `drivers/pcan.cpp` (PCAN-Basic, loaded at run time) is classic CAN only. Tested
+* **Windows before 10 1903** does not honour the UTF-8 code page of the manifest: non-ASCII paths
+  fail there. Not planned.
+* **PEAK CAN FD is untested**: `drivers/pcan.cpp` opens an FD-capable channel through
+  `CAN_InitializeFD` (80 MHz clock, timing computed from bitrate and sample point) and uses
+  `CAN_ReadFD` / `CAN_WriteFD`, written from the PCAN-Basic documentation. Classic CAN was tested
   with a PCAN-USB: listed, opens, sends, closes and reopens; receiving was not tested (no traffic
   on the bus).
-* Live CAN test of PEAK receive, Kvaser, SLCAN, GrIP, CANblaster and the libusb devices on Windows.
-* GUI subsystem exe (a console window opens when started from Explorer), an icon, dark title bar,
-  `longPathAware`.
-* CI job on `windows-latest`: build, ctest, upload the zip.
-* Vector XL (`vxlapi64.dll`) if colleagues use Vector hardware. Installer with an uninstall entry
-  (Inno Setup) and code signing.
+* Live CAN test of PEAK receive and FD, Kvaser, SLCAN, GrIP, CANblaster and the libusb devices on
+  Windows.
+* The exe is a GUI subsystem program with an icon, a title bar that follows the theme and
+  `longPathAware`; none of it has been looked at on a machine yet (started from Explorer, from a
+  console with `--smoke`, light and dark theme).
+* Vector XL (`vxlapi64.dll`) if colleagues use Vector hardware. Code signing. The setup.exe has
+  not been built or run yet: Inno Setup is not on the development machine, CI builds it.
 
 Performance (numbers in `docs/performance-baseline.md`): playing into the trace runs at 14–19M
 frames/s against 41–45M on Linux and the first decode over a mapped cache is about 10x slower.
@@ -80,8 +81,8 @@ Not yet profiled; page faults on the mapping and on fresh trace memory are the f
 There is no RAM-backed cache build on Windows (`file_ram` returns none), every first load writes
 the cache to disk.
 
-Deliberate simplifications in the Windows code are mostly not marked `// ponytail:` yet (one
-marker, in `serial_win32.cpp`).
+Deliberate simplifications in the Windows code are mostly not marked `// ponytail:` yet (markers
+in `serial_win32.cpp` and `pcan.cpp`).
 
 ## What is already portable
 

@@ -1,5 +1,6 @@
 # Build the Windows zip: kraken-explorer.exe, an embeddable Python next to it (scripts work
-# without a Python install), the examples and install.bat / uninstall.bat.
+# without a Python install), the examples and install.bat / uninstall.bat. With Inno Setup 6
+# installed also kraken-explorer-<version>-win64-setup.exe: the same files as one installer.
 # Usage (cmake, ninja and MinGW-w64 g++ in PATH, python.org Python installed):
 #   powershell -ExecutionPolicy Bypass -File scripts\build_win_zip.ps1 [-Build <dir>]
 # CMAKE_ARGS: extra configure flags, e.g. -DKRAKEN_DEPS_DIR=C:\deps (WinLibs' cmake cannot https).
@@ -39,3 +40,13 @@ $Zip = "$Stage.zip"
 if (Test-Path $Zip) { Remove-Item $Zip }
 Compress-Archive $Stage $Zip
 Write-Host "built $Zip"
+
+$Iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+if (-not $Iscc) { $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+if (Test-Path $Iscc) {
+    & $Iscc /Qp "/DVersion=$Version" "/DStage=$((Resolve-Path $Stage).Path)" "/DOut=$((Resolve-Path $Build).Path)" "$Src\packaging\windows\kraken-explorer.iss"
+    if ($LASTEXITCODE) { throw "installer failed" }
+    Write-Host "built $Build\$Name-$Version-win64-setup.exe"
+} else {
+    Write-Host "Inno Setup not found: no setup.exe (winget install JRSoftware.InnoSetup)"
+}

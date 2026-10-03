@@ -26,6 +26,8 @@ enum class Icon
     Replay,
     Database,
     Convert,
+    PlaybackPause,
+    PlaybackStep,
     Count
 };
 

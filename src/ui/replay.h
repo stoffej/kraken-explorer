@@ -77,6 +77,7 @@ struct ReplayIdRow
     bool has_tx = false;
     bool rx_on = false; // replayed when the frame's direction is enabled
     bool tx_on = false;
+    bool brk = false;   // breakpoint: the player pauses before every replayed frame of this row
 };
 
 // Rows sorted by (channel, id), all enabled.
@@ -117,6 +118,11 @@ struct ReplayLoaded
 // The loaded frames: the cache's records (empty without a cache).
 [[nodiscard]] std::span<const FrameCacheRec> replay_frames(const ReplayLoaded& d);
 
+// Replay::hold: the player runs, waits before its next frame, or sends one frame and waits again.
+inline constexpr int replay_playing = 0;
+inline constexpr int replay_paused = 1;
+inline constexpr int replay_stepping = 2;
+
 // State of one Replay View. Not movable (thread, atomics).
 struct Replay
 {
@@ -128,6 +134,7 @@ struct Replay
     bool fast = false;  // as fast as possible: no timing at all
     std::string range_from; // part of the file to play, times since its first frame ("" = start / end)
     std::string range_to;
+    std::string break_at;   // breakpoints by time: times since the first frame, comma separated
     bool autoplay = false;
     bool loop = false;
     bool was_measuring = false;
@@ -139,6 +146,8 @@ struct Replay
     std::shared_ptr<const FrameCache> play_cache; // keeps play_frames mapped, holds their overflow payloads
     std::vector<ReplayIdRow> play_rows;
     std::vector<int> play_mapping;
+    std::vector<std::size_t> play_breaks; // break_at as indices into play_frames, sorted
+    std::atomic<int> hold{replay_playing}; // replay_pause / replay_resume / replay_single_step, and breakpoints
     std::atomic<std::size_t> position{0};
     std::atomic<bool> running{false};
     // Replay window's frames/s: sampled every half second while playing; when the run ends, its
@@ -168,6 +177,8 @@ struct Replay
 // Player thread body: sends each enabled frame of play_frames when due (start + at_ns / speed;
 // speed 0 = as fast as possible, no waiting), steps that cannot be
 // sent on their interface go to the trace through tasks. Loops if asked. Clears running.
+// A breakpoint (a row's brk, or an index in play_breaks) sets hold to replay_paused before its
+// frame and wakes the main loop; the frame goes out on resume or step, at once.
 void replay_run(std::stop_token stop, Replay& r, std::deque<Iface>& ifaces, Tasks& tasks, double speed, bool loop);
 
 // Starts reading and parsing a file (format from the extension, ASC otherwise) on r.loader;
@@ -182,9 +193,16 @@ bool replay_load_poll(App& app, Replay& r);
 // Cancels a running load (joins the loader) and discards its result.
 void replay_load_cancel(Replay& r);
 
-// Builds the plan and starts the player; replay_stop joins it.
-void replay_start(Replay& r, std::deque<Iface>& ifaces, Tasks& tasks);
+// Builds the plan and starts the player; replay_stop joins it. hold = replay_stepping: the first
+// frame, then paused.
+void replay_start(Replay& r, std::deque<Iface>& ifaces, Tasks& tasks, int hold = replay_playing);
 void replay_stop(Replay& r);
+
+// While playing: pause before the next frame (when it is due), go on, or send one frame and stay
+// paused. Time spent paused is not caught up.
+void replay_pause(Replay& r);
+void replay_resume(Replay& r);
+void replay_single_step(Replay& r);
 
 // The once-a-second check of the loaded file on disk (size/mtime, then its content hash off the
 // main thread); a changed file is reloaded. draw_replay calls it; the idle main loop calls it

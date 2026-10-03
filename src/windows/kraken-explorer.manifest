@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!-- UTF-8 as the process code page (Windows 10 1903+): getenv, fopen and std::filesystem::path
-     take and give UTF-8 as on Linux, so paths with non-ASCII characters work unchanged. -->
+     take and give UTF-8 as on Linux, so paths with non-ASCII characters work unchanged.
+     longPathAware (Windows 10 1607+, with the LongPathsEnabled policy): paths over 260 characters. -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity type="win32" name="KrakenExplorer" version="1.0.0.0"/>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
     </windowsSettings>
   </application>
 </assembly>

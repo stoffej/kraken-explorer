@@ -52,9 +52,11 @@ constexpr std::array<CommandInfo, static_cast<std::size_t>(Command::Count)> comm
     {"Replay"},
     {"LIN Control"},
     {"Instrument Panel"},
+    {"Watch"},
     {"DBC Editor"},
     {"Standalone Graph", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_B},
     {"Conditional Logging..."},
+    {"Macros..."},
     {"Find Signal...", ImGuiMod_Ctrl | ImGuiKey_P},
     {"Convert..."},
     {"About"},
@@ -118,7 +120,7 @@ void poll_shortcuts(App& app)
     // copy menu cleared an 8 GB view in a GUI test).
     const bool popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || help_overlay_is_open()
                             || ImGui::GetIO().WantTextInput || !app.trace.file.empty();
-    if (app.menu.capturing_shortcut)
+    if (app.menu.capturing_shortcut || app.macros.capture)
     {
         return; // the key being recorded must not run a command
     }
@@ -192,6 +194,7 @@ void draw_menu_bar(App& app)
         menu_item(app, Command::Setup);
         menu_item(app, Command::ReloadInterfaces);
         menu_item(app, Command::ConditionalLogging);
+        menu_item(app, Command::Macros);
         if (ImGui::BeginMenu("Driver"))
         {
             ImGui::MenuItem("CANblaster", nullptr, &app.menu.canblaster);
@@ -498,6 +501,36 @@ void menu_add_recent(MainMenu& menu, std::string path)
 const char* command_label(Command cmd) noexcept
 {
     return info(cmd).label;
+}
+
+int chord_capture()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
+    {
+        const auto key = static_cast<ImGuiKey>(k);
+        const bool modifier = (key >= ImGuiKey_LeftCtrl && key <= ImGuiKey_RightSuper) || key >= ImGuiKey_ReservedForModCtrl;
+        if (modifier || !ImGui::IsKeyPressed(key, false))
+        {
+            continue;
+        }
+        if (key == ImGuiKey_Escape)
+        {
+            return chord_capture_cancelled;
+        }
+        const int mods = (io.KeyCtrl ? ImGuiMod_Ctrl : 0) | (io.KeyShift ? ImGuiMod_Shift : 0)
+                         | (io.KeyAlt ? ImGuiMod_Alt : 0) | (io.KeySuper ? ImGuiMod_Super : 0);
+        return key == ImGuiKey_Backspace ? ImGuiKey_None : (mods | k);
+    }
+    return chord_capture_waiting;
+}
+
+void menu_run(App& app, Command cmd)
+{
+    if (enabled(app, cmd))
+    {
+        run(app, cmd);
+    }
 }
 
 const char* command_shortcut(const MainMenu& menu, Command cmd)

@@ -29,6 +29,9 @@ if(WIN32)
         target_link_options(kraken_manifest INTERFACE -B${manifest_dir}/)
     endif()
     target_link_libraries(kraken-explorer PRIVATE kraken_manifest)
+    # GUI subsystem: no console window when started from Explorer or the Start menu. main()
+    # attaches to the console it was started from, so --smoke and --script still print there.
+    set_target_properties(kraken-explorer PROPERTIES WIN32_EXECUTABLE ON)
     # The example scripts next to the exe, as in the zip: ui/script_window.cpp looks there.
     add_custom_command(TARGET kraken-explorer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/examples $<TARGET_FILE_DIR:kraken-explorer>/examples)

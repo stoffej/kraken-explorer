@@ -13,6 +13,11 @@
 #endif
 
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h> // theme_apply: the title bar
+#include <dwmapi.h>
+#endif
 #include <imgui.h>
 #include <imgui_internal.h> // ImFontLoader, atlas packing
 #include <implot.h>
@@ -329,6 +334,15 @@ void theme_apply(bool dark)
     style.ScrollbarSize = 16.0f; // wide enough to see and grab in long trace tables
     apply_palette(style.Colors, dark, dark ? abyss : shallows);
     apply_plot_colormap(dark);
+#ifdef _WIN32
+    // The title bar follows the theme (Windows 10 2004 and later, older ones refuse the attribute).
+    // No window in the headless tests.
+    if (GLFWwindow* window = glfwGetCurrentContext())
+    {
+        const BOOL on = dark;
+        DwmSetWindowAttribute(glfwGetWin32Window(window), 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &on, sizeof on);
+    }
+#endif
 }
 
 bool theme_app_icon(std::vector<unsigned char>& rgba, int size)

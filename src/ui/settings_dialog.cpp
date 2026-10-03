@@ -125,25 +125,15 @@ void draw_settings_dialog(App& app, SettingsDialogState& s)
     const bool capturing = app.menu.capturing_shortcut; // Esc then cancels the capture, not the dialog
     if (s.capture >= 0)
     {
-        const ImGuiIO& io = ImGui::GetIO();
-        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
+        if (const int chord = chord_capture(); chord != chord_capture_waiting)
         {
-            const auto key = static_cast<ImGuiKey>(k);
-            const bool modifier = (key >= ImGuiKey_LeftCtrl && key <= ImGuiKey_RightSuper) || key >= ImGuiKey_ReservedForModCtrl;
-            if (modifier || !ImGui::IsKeyPressed(key, false))
+            if (chord != chord_capture_cancelled)
             {
-                continue;
-            }
-            if (key != ImGuiKey_Escape)
-            {
-                const int mods = (io.KeyCtrl ? ImGuiMod_Ctrl : 0) | (io.KeyShift ? ImGuiMod_Shift : 0)
-                                 | (io.KeyAlt ? ImGuiMod_Alt : 0) | (io.KeySuper ? ImGuiMod_Super : 0);
-                app.menu.chords[static_cast<std::size_t>(s.capture)] = key == ImGuiKey_Backspace ? ImGuiKey_None : (mods | k);
+                app.menu.chords[static_cast<std::size_t>(s.capture)] = chord;
                 ImGui::MarkIniSettingsDirty();
             }
             s.capture = -1;
             app.menu.capturing_shortcut = false;
-            break;
         }
     }
 

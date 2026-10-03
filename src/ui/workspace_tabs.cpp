@@ -91,6 +91,7 @@ void workspace_close_tab(App& app, unsigned uid)
     app.replays.erase(uid);
     app.lin_controls.erase(uid);
     app.instrument_panels.erase(uid);
+    app.watch_windows.erase(uid);
     if (index < ws.current || ws.current >= static_cast<int>(ws.tabs.size()))
     {
         --ws.current;

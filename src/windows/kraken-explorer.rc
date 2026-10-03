@@ -1,4 +1,7 @@
-// Resources of kraken-explorer.exe. 1 24 = CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST.
+// Resources of kraken-explorer.exe and the tests. 1 24 = CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST.
 // MinGW's own default manifest is kept out of the link in src/CMakeLists.txt.
 LANGUAGE 0, 0
 1 24 "kraken-explorer.manifest"
+// The icon Explorer and the taskbar show (the lowest id is the exe's icon); the 256 px PNG of
+// packaging/kraken-explorer.png in an .ico container.
+1 ICON "kraken-explorer.ico"

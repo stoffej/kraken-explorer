@@ -27,6 +27,8 @@ void app_workspace_run(App& app, Command cmd, const std::string& recent_path)
         app.workspace.tabs.clear(); // draw_workspace adds a fresh default tab
         app.tx_generators.clear();  // else orphaned generators keep their rows (and threads)
         app.instrument_panels.clear();
+        app.watch_windows.clear();
+        app.macros.items.clear();
         app.dbc_editors.clear();
         app.setup = {};
         ifaces_default_setup(app.ifaces, app.setup);
@@ -162,6 +164,10 @@ void app_frame(App& app)
     {
         instrument_panel_ingest(panel, app.setup, app.trace); // only the frames appended since last time
     }
+    for (auto& [uid, watch] : app.watch_windows)
+    {
+        watch_ingest(watch, app.setup, app.trace);
+    }
     draw_main_menu(app);
     app_workspace_commands(app);
     if (menu_take(app.menu, Command::MeasurementStart))
@@ -250,6 +256,14 @@ void app_frame(App& app)
         {
             draw_instrument_panel(app, *tab, it->second);
         }
+        if (menu_take(app.menu, Command::NewWatchWindow))
+        {
+            app.watch_windows[tab->uid].open = true;
+        }
+        if (const auto it = app.watch_windows.find(tab->uid); it != app.watch_windows.end())
+        {
+            draw_watch_window(app, *tab, it->second);
+        }
         if (menu_take(app.menu, Command::NewDbcEditor))
         {
             DbcEditorState& ed = app.dbc_editors[tab->uid];
@@ -276,6 +290,7 @@ void app_frame(App& app)
     {
         conditional_logging_open(app.conditional_logging);
     }
+    macros_frame(app, app.macros);
     conditional_logging_frame(app, app.conditional_logging);
     draw_conditional_logging(app, app.conditional_logging);
     draw_graph_windows(app, workspace_current(app.workspace));

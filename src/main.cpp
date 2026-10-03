@@ -35,6 +35,11 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // AttachConsole
+#endif
+
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <implot.h>
@@ -207,6 +212,15 @@ void render_png_export(const App::PngExport& e)
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // A GUI subsystem exe starts without stdout / stderr unless they are redirected: take the
+    // console of the shell that started us, if any.
+    if (_fileno(stderr) < 0 && AttachConsole(ATTACH_PARENT_PROCESS))
+    {
+        std::freopen("CONOUT$", "w", stdout);
+        std::freopen("CONOUT$", "w", stderr);
+    }
+#endif
     // --smoke N: render N frames, then exit (headless CI / sanitizer runs).
     // --measure: start a measurement on the default/loaded setup right away.
     // --record: arm recording (Ctrl+R) right away.

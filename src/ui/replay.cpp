@@ -12,6 +12,7 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <ranges>
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -1259,23 +1260,25 @@ void parse_pcapng(std::string_view data, ReplayFile& f, const ReplayParseProgres
 
 // ---------------------------------------------------------------- UI helpers
 
-bool row_enabled(const std::vector<ReplayIdRow>& rows, const BusMessage& m)
+const ReplayIdRow* find_row(const std::vector<ReplayIdRow>& rows, const BusMessage& m)
 {
     const uint32_t id = is_error_frame(m) ? replay_error_id : m.id;
     const auto it = std::ranges::lower_bound(rows, std::pair{m.iface, id}, {},
                                              [](const ReplayIdRow& r) { return std::pair{r.channel, r.id}; });
-    if (it == rows.end() || it->channel != m.iface || it->id != id)
-    {
-        return false;
-    }
-    return has_flag(m, bus_flag::tx) ? it->tx_on : it->rx_on;
+    return it == rows.end() || it->channel != m.iface || it->id != id ? nullptr : &*it;
+}
+
+bool row_enabled(const std::vector<ReplayIdRow>& rows, const BusMessage& m)
+{
+    const ReplayIdRow* row = find_row(rows, m);
+    return row != nullptr && (has_flag(m, bus_flag::tx) ? row->tx_on : row->rx_on);
 }
 
 void draw_filter_table(App& app, Replay& r)
 {
     constexpr ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY
                                       | ImGuiTableFlags_Resizable;
-    if (!ImGui::BeginTable("##filter", 6, flags))
+    if (!ImGui::BeginTable("##filter", 7, flags))
     {
         return;
     }
@@ -1285,6 +1288,7 @@ void draw_filter_table(App& app, Replay& r)
     ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("RX", ImGuiTableColumnFlags_WidthFixed, 30.0f * px);
     ImGui::TableSetupColumn("TX", ImGuiTableColumnFlags_WidthFixed, 30.0f * px);
+    ImGui::TableSetupColumn("Break", ImGuiTableColumnFlags_WidthFixed, 45.0f * px);
     ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f * px);
     ImGui::TableSetupColumn("Output", ImGuiTableColumnFlags_WidthFixed, 150.0f * px);
     ImGui::TableHeadersRow();
@@ -1317,9 +1321,9 @@ void draw_filter_table(App& app, Replay& r)
                 it->tx_on = on && it->has_tx;
             }
         }
-        ImGui::TableSetColumnIndex(4);
-        ImGui::Text("%d", total);
         ImGui::TableSetColumnIndex(5);
+        ImGui::Text("%d", total);
+        ImGui::TableSetColumnIndex(6);
         ImGui::SetNextItemWidth(-FLT_MIN);
         const int target = r.mapping[ch];
         const std::string preview = target >= 0 && static_cast<std::size_t>(target) < app.ifaces.size()
@@ -1386,6 +1390,9 @@ void draw_filter_table(App& app, Replay& r)
                 {
                     ImGui::Checkbox("##tx", &row.tx_on);
                 }
+                ImGui::TableNextColumn();
+                ImGui::Checkbox("##brk", &row.brk);
+                ImGui::SetItemTooltip("Breakpoint: pause the replay before every frame with this id");
                 ImGui::TableNextColumn();
                 ImGui::Text("%d", row.count);
                 ImGui::PopID();
@@ -1536,10 +1543,10 @@ void replay_run(std::stop_token stop, Replay& r, std::deque<Iface>& ifaces, Task
     };
     do
     {
-        const auto start = steady_clock::now();
         const std::span<const FrameCacheRec> frames = r.play_frames;
         const std::span<const FrameCachePayload> overflow = // play_frames are the cache's records, it holds their payloads
             r.play_cache != nullptr ? r.play_cache->overflow : std::span<const FrameCachePayload>{};
+        auto start = steady_clock::now();
         ReplayStep step;
         for (std::size_t i = 0; i < frames.size(); ++i)
         {
@@ -1549,17 +1556,51 @@ void replay_run(std::stop_token stop, Replay& r, std::deque<Iface>& ifaces, Task
                 continue;
             }
             any = any || step.at_ns > 0;
-            if (speed > 0.0)
+            const auto offset = duration_cast<steady_clock::duration>(duration<double, std::nano>(speed > 0.0 ? static_cast<double>(step.at_ns) / speed : 0.0));
+            const ReplayIdRow* row = find_row(r.play_rows, step.msg);
+            if ((row != nullptr && row->brk) || std::ranges::binary_search(r.play_breaks, i))
             {
-                const auto due = start + duration_cast<steady_clock::duration>(duration<double, std::nano>(static_cast<double>(step.at_ns) / speed));
+                int playing = replay_playing; // a step onto the frame pauses after it anyway
+                r.hold.compare_exchange_strong(playing, replay_paused);
+            }
+            bool held = false;
+            const auto hold_here = [&]
+            {
+                if (r.hold != replay_paused)
+                {
+                    return;
+                }
+                flush(); // the trace shows everything before the pause
+                if (tasks.wake != nullptr)
+                {
+                    tasks.wake();
+                }
+                // replay_stop requests the stop before it releases the hold: no wait is entered after it.
+                while (r.hold == replay_paused && !stop.stop_requested())
+                {
+                    r.hold.wait(replay_paused);
+                }
+                held = true;
+            };
+            hold_here();
+            if (speed > 0.0 && !held && r.hold == replay_playing)
+            {
                 std::unique_lock lock(mutex);
-                cv.wait_until(lock, stop, due, [] { return false; });
+                cv.wait_until(lock, stop, start + offset, [] { return false; });
+                lock.unlock();
+                hold_here(); // paused during the wait: the frame is due, it goes out on resume
             }
             if (stop.stop_requested())
             {
                 r.running = false;
                 return;
             }
+            if (held || r.hold == replay_stepping)
+            {
+                start = steady_clock::now() - offset; // this frame is "now": the rest keeps its spacing
+            }
+            int stepping = replay_stepping; // one frame per step: paused again before the next
+            r.hold.compare_exchange_strong(stepping, replay_paused);
             BusMessage msg = step.msg;
             msg.flags &= static_cast<uint16_t>(~bus_flag::tx);
             if (step.target >= 0 && static_cast<std::size_t>(step.target) < ifaces.size())
@@ -1732,13 +1773,30 @@ bool replay_load_poll(App& app, Replay& r)
     return true;
 }
 
-void replay_start(Replay& r, std::deque<Iface>& ifaces, Tasks& tasks)
+void replay_start(Replay& r, std::deque<Iface>& ifaces, Tasks& tasks, int hold)
 {
     replay_stop(r);
-    r.play_frames = replay_range(replay_frames(r.data), r.range_from, r.range_to);
+    const std::span<const FrameCacheRec> all = replay_frames(r.data);
+    r.play_frames = replay_range(all, r.range_from, r.range_to);
     r.play_cache = r.data.cache;
     r.play_rows = r.data.rows;
     r.play_mapping = r.mapping;
+    r.play_breaks.clear();
+    for (const auto part : std::views::split(std::string_view(r.break_at), ','))
+    {
+        // The first frame at or after the time, as an index into the part being played.
+        if (const auto secs = parse_duration(trim(std::string_view(part))); secs && !r.play_frames.empty())
+        {
+            const int64_t at = all.front().ts_ns + static_cast<int64_t>(*secs * 1e9);
+            const auto it = std::ranges::lower_bound(r.play_frames, at, {}, &FrameCacheRec::ts_ns);
+            if (it != r.play_frames.end())
+            {
+                r.play_breaks.push_back(static_cast<std::size_t>(it - r.play_frames.begin()));
+            }
+        }
+    }
+    std::ranges::sort(r.play_breaks);
+    r.hold = hold;
     r.position = 0;
     r.running = true;
     platform_fine_timers();
@@ -1748,8 +1806,29 @@ void replay_start(Replay& r, std::deque<Iface>& ifaces, Tasks& tasks)
 
 void replay_stop(Replay& r)
 {
-    r.player = {}; // request_stop + join
+    r.player.request_stop(); // before the hold is released: a paused player must not pause again
+    r.hold = replay_playing;
+    r.hold.notify_all();
+    r.player = {}; // join
     r.running = false;
+}
+
+void replay_pause(Replay& r)
+{
+    int playing = replay_playing;
+    r.hold.compare_exchange_strong(playing, replay_paused);
+}
+
+void replay_resume(Replay& r)
+{
+    r.hold = replay_playing;
+    r.hold.notify_all();
+}
+
+void replay_single_step(Replay& r)
+{
+    r.hold = replay_stepping;
+    r.hold.notify_all();
 }
 
 void replay_watch(App& app, Replay& r)
@@ -1852,6 +1931,29 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
         }
         ImGui::EndDisabled();
         ImGui::EndDisabled();
+        const bool paused = running && r.hold == replay_paused;
+        same_line_or_wrap(icon_text_button_width("Continue"));
+        ImGui::BeginDisabled(!running);
+        if (paused ? icon_text_button("Continue", Icon::PlaybackStart) : icon_text_button("Pause", Icon::PlaybackPause))
+        {
+            paused ? replay_resume(r) : replay_pause(r);
+        }
+        ImGui::EndDisabled();
+        same_line_or_wrap(icon_text_button_width("Step"));
+        ImGui::BeginDisabled(running ? !paused : replay_frames(r.data).empty());
+        if (icon_text_button("Step", Icon::PlaybackStep))
+        {
+            if (paused)
+            {
+                replay_single_step(r);
+            }
+            else
+            {
+                replay_start(r, app.ifaces, app.tasks, replay_stepping);
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Send the next message and pause");
         same_line_or_wrap(icon_text_button_width("Stop"));
         ImGui::BeginDisabled(!running);
         if (icon_text_button("Stop", Icon::PlaybackStop))
@@ -1979,7 +2081,14 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
             }
             r.rate_running = running;
         }
-        if (running || r.position > 0)
+        if (const std::size_t next = r.position; paused && next < r.play_frames.size())
+        {
+            std::string index;
+            append_grouped(index, next + 1);
+            const double at = static_cast<double>(r.play_frames[next].ts_ns - replay_frames(r.data).front().ts_ns) / 1e9;
+            ImGui::Text("Paused before message %s at %s", index.c_str(), format_duration(at, 3).c_str());
+        }
+        else if (running || r.position > 0)
         {
             std::string rate;
             append_grouped(rate, static_cast<uint64_t>(r.rate_fps + 0.5));
@@ -2015,6 +2124,13 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
         std::string count;
         append_grouped(count, in_range);
         ImGui::TextDisabled("%s messages", count.c_str());
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Break at");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##break_at", "times since the first frame, e.g. 1:30, 2:10.5", &r.break_at);
+        ImGui::SetItemTooltip("Breakpoints: the replay pauses before the first message at or after each time.\n"
+                              "The Break column below pauses before every message of an id.");
         ImGui::EndDisabled();
 
         ImGui::BeginDisabled(running); // ponytail: filters and mapping are snapshotted at Play; make them live if editing mid-playback is wanted
