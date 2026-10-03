@@ -17,6 +17,7 @@ if(NOT WIN32)
     target_link_libraries(kraken_drivers PRIVATE PkgConfig::LIBNL)
 else()
     target_link_libraries(kraken_drivers PRIVATE ws2_32) # canblast.cpp
+    target_sources(kraken_drivers PRIVATE pcan.cpp) # PCAN-Basic; on Linux PEAK adapters are SocketCAN
 endif()
 
 # Vendor interface of the 1d50:606f composite adapter: lin_usb (LindeAPI)

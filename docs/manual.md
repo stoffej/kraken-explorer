@@ -13,7 +13,7 @@ Version 0.0.2.
 | Interface | Notes |
 | :--- | :--- |
 | **SocketCAN** | Any kernel CAN interface (`can0`, `vcan0`, …) |
-| **PEAK PCAN** | PCAN-USB, PCAN-USB Pro, PCAN-PCIe, … through SocketCAN (`peak_usb` / `peak_pci` kernel drivers) |
+| **PEAK PCAN** | PCAN-USB, PCAN-USB Pro, PCAN-PCIe, … through SocketCAN (`peak_usb` / `peak_pci` kernel drivers) on Linux; on Windows through PCAN-Basic (`PCANBasic.dll` of the PEAK driver package, classic CAN) |
 | **Kvaser** | Leaf, USBcan and other Kvaser devices: natively through CANlib when linuxcan is installed (CAN FD included), or as SocketCAN through the kernel's `kvaser_usb` driver |
 | **Candlelight / CANable / CANnectivity** | gs_usb devices (CANable with Candlelight firmware, MKS CANable, cantact, CANnectivity, …). Via SocketCAN (`gs_usb` kernel driver) |
 | **SLCAN** | CANable (SLCAN firmware), WeAct, Arduino CAN shields |

@@ -5,7 +5,7 @@ logs, graph, DBC editor, Replay, Python scripts, and live CAN through the adapte
 
 Status (2026-10-03): builds with MinGW-w64 GCC, all 56 ctest areas that run on Windows pass, the
 zip from `scripts/build_win_zip.ps1` installs and runs Python scripts without a Python install.
-Live CAN is untested on Windows. What is left is under "To do".
+Live CAN: PEAK sends through PCAN-Basic, the other adapters are untested on Windows. What is left is under "To do".
 
 ## Build
 
@@ -64,9 +64,10 @@ Bugs found in the review of the port, most important first:
 
 Missing features:
 
-* **PEAK driver**: `pcan.cpp` against PCAN-Basic (`PCANBasic.dll`, loaded at run time like
-  `kvaser.cpp`), CAN and CAN FD. PCAN-Basic and the PEAK device driver must be installed.
-* Live CAN test of Kvaser, SLCAN, GrIP, CANblaster and the libusb devices on Windows.
+* **PEAK CAN FD**: `drivers/pcan.cpp` (PCAN-Basic, loaded at run time) is classic CAN only. Tested
+  with a PCAN-USB: listed, opens, sends, closes and reopens; receiving was not tested (no traffic
+  on the bus).
+* Live CAN test of PEAK receive, Kvaser, SLCAN, GrIP, CANblaster and the libusb devices on Windows.
 * GUI subsystem exe (a console window opens when started from Explorer), an icon, dark title bar,
   `longPathAware`.
 * CI job on `windows-latest`: build, ctest, upload the zip.
