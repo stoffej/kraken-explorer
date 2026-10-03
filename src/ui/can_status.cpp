@@ -451,6 +451,10 @@ void draw_link_buttons(App& app, const Iface& iface)
 
 void draw_new_vcan_button(App& app)
 {
+    if (!socketcan_available)
+    {
+        return;
+    }
     ImGui::BeginDisabled(app.can_status.link_busy || app.measuring);
     if (ImGui::Button("New vcan"))
     {

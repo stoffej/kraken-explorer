@@ -115,6 +115,8 @@ struct Kvaser
     canHandle handle = -1;
     int64_t open_ns = 0;   // host time at canBusOn, base for device timestamps
     bool fd = false;
+    unsigned long last_ts = 0;   // read(): the previous device timestamp
+    uint64_t ts_wraps = 0;       // times it wrapped (32-bit unsigned long on Windows: every 71.6 min)
 
     std::mutex tx_mutex;
     std::deque<BusMessage> tx_done;   // sent frames, reported by read()
@@ -370,7 +372,13 @@ int kvaser_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
         {
             m.flags |= bus_flag::fd | ((flags & canFDMSG_BRS) != 0 ? bus_flag::brs : 0);
         }
-        m.ts_ns = k.open_ns + static_cast<int64_t>(ts) * kvaser_tick_ns;
+        // Half the range back is a wrap, less is frames of two queues slightly out of order.
+        if (sizeof ts == 4 && ts < k.last_ts && k.last_ts - ts > 0x80000000ul)
+        {
+            ++k.ts_wraps;
+        }
+        k.last_ts = ts;
+        m.ts_ns = k.open_ns + static_cast<int64_t>((k.ts_wraps << 32) + ts) * kvaser_tick_ns;
         set_length(m, static_cast<int>(std::min(dlc, fd ? 64u : 8u))); // CANlib reports FD lengths in bytes
         std::copy_n(data, m.len, m.data.begin());
         ++k.rx_frames;

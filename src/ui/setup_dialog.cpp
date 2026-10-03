@@ -442,7 +442,10 @@ void draw_interfaces_page(App& app, SetupDialogState& s, SetupNetwork& net)
         s.row = -1;
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    if (socketcan_available)
+    {
+        ImGui::SameLine();
+    }
     draw_new_vcan_button(app); // then "Add Interface..." picks it up
     draw_add_interfaces_popup(app, s, net);
 }

@@ -195,15 +195,21 @@ void grow_map_close_ptr(GrowMap* m) { grow_map_close(*m); }
 
 // tmp becomes cache. A cache that is still mapped (the same log open in another tab or instance)
 // cannot be replaced on Windows, only renamed: it is moved aside as a .tmp, which
-// frame_cache_prune removes once nobody maps it.
+// frame_cache_prune removes once nobody maps it. Each gets its own name: an earlier one may still
+// be mapped. A few retries, for a virus scanner holding the new file for a moment.
 bool replace_cache(const std::filesystem::path& tmp, const std::filesystem::path& cache)
 {
+    static std::atomic<unsigned> moved_aside{0};
     std::error_code ec;
     std::filesystem::rename(tmp, cache, ec);
-    if (ec)
+    for (int attempt = 0; ec && attempt < 5; ++attempt)
     {
-        std::filesystem::rename(cache, cache.string() + std::format(".{}.old.tmp", platform_pid()), ec);
+        std::filesystem::rename(cache, cache.string() + std::format(".{}.{}.old.tmp", platform_pid(), moved_aside++), ec);
         std::filesystem::rename(tmp, cache, ec);
+        if (ec)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
     }
     return !ec;
 }

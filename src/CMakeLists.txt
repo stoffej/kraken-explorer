@@ -13,7 +13,9 @@ endif()
 add_executable(kraken-explorer main.cpp)
 target_link_libraries(kraken-explorer PRIVATE imgui kraken_app)
 if(WIN32)
-    target_sources(kraken-explorer PRIVATE windows/kraken-explorer.rc) # manifest: UTF-8 code page
+    # The manifest (UTF-8 code page) of every executable: the app and the tests.
+    add_library(kraken_manifest INTERFACE)
+    target_sources(kraken_manifest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/windows/kraken-explorer.rc)
     if(MINGW)
         # GCC adds its own default-manifest.o to every link. Next to ours ld reports "multiple
         # non-default manifests" and a Release link crashes (binutils 2.47), leaving a truncated
@@ -22,9 +24,11 @@ if(WIN32)
         file(WRITE ${manifest_dir}/empty.c "")
         add_custom_command(OUTPUT ${manifest_dir}/default-manifest.o
             COMMAND ${CMAKE_C_COMPILER} -c ${manifest_dir}/empty.c -o ${manifest_dir}/default-manifest.o)
-        target_sources(kraken-explorer PRIVATE ${manifest_dir}/default-manifest.o)
-        target_link_options(kraken-explorer PRIVATE -B${manifest_dir}/)
+        add_custom_target(kraken_default_manifest DEPENDS ${manifest_dir}/default-manifest.o)
+        add_dependencies(kraken_manifest kraken_default_manifest)
+        target_link_options(kraken_manifest INTERFACE -B${manifest_dir}/)
     endif()
+    target_link_libraries(kraken-explorer PRIVATE kraken_manifest)
     # The example scripts next to the exe, as in the zip: ui/script_window.cpp looks there.
     add_custom_command(TARGET kraken-explorer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/examples $<TARGET_FILE_DIR:kraken-explorer>/examples)

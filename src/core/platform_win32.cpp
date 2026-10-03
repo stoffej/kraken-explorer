@@ -277,7 +277,16 @@ int platform_pid()
 
 void platform_fine_timers()
 {
-    static const MMRESULT once = timeBeginPeriod(1); // for the life of the process
+    static const MMRESULT once = []
+    {
+        // Windows 11 ignores timeBeginPeriod while the window is minimized or covered unless the
+        // process opts out of that throttling: cyclic TX and Replay would fall back to 15.6 ms.
+        // ProcessPowerThrottling = 4, PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION = 4;
+        // older Windows refuses the call, which changes nothing there.
+        struct { ULONG version, control_mask, state_mask; } throttling{1, 4, 0};
+        SetProcessInformation(GetCurrentProcess(), static_cast<PROCESS_INFORMATION_CLASS>(4), &throttling, sizeof throttling);
+        return timeBeginPeriod(1); // for the life of the process
+    }();
     (void)once;
 }
 

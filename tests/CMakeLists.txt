@@ -3,7 +3,7 @@
 # what a test references), so a new area needs no CMake. util: pseudo terminals (serial, slcan, grip).
 file(GLOB test_sources CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*/*_test.cpp)
 if(WIN32)
-    set(test_libs ZLIB::ZLIB)
+    set(test_libs ZLIB::ZLIB kraken_manifest) # UTF-8 paths, as in the app
     set(linux_only drivers grip_driver serial slcan_driver) # SocketCAN (vcan) and pseudo terminals
 else()
     set(test_libs ZLIB::ZLIB util)
