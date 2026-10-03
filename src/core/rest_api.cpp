@@ -26,14 +26,9 @@
 #include <format>
 #include <future>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include "app.h"
 #include "core/log.h"
+#include "core/net.h"
 #include "core/tasks.h"
 
 namespace
@@ -116,12 +111,11 @@ void serve(std::stop_token stop, RestApi& api, App& app)
 {
     while (!stop.stop_requested())
     {
-        pollfd pfd{.fd = api.fd, .events = POLLIN, .revents = 0};
-        if (poll(&pfd, 1, 200) <= 0)
+        if (net_wait_readable(api.fd, 200) <= 0)
         {
             continue;
         }
-        const int client = accept(api.fd, nullptr, nullptr);
+        const int client = static_cast<int>(accept(api.fd, nullptr, nullptr));
         if (client < 0)
         {
             continue;
@@ -147,7 +141,7 @@ void serve(std::stop_token stop, RestApi& api, App& app)
             {
                 break;
             }
-            const ssize_t n = read(client, buf, sizeof(buf));
+            const auto n = recv(client, buf, sizeof(buf), 0);
             if (n <= 0)
             {
                 break;
@@ -178,14 +172,14 @@ void serve(std::stop_token stop, RestApi& api, App& app)
                                                  status, status == 200 ? "OK" : "Error", body.size(), body);
         for (std::size_t sent = 0; sent < response.size();)
         {
-            const ssize_t n = write(client, response.data() + sent, response.size() - sent);
+            const auto n = send(client, response.data() + sent, static_cast<int>(response.size() - sent), 0);
             if (n <= 0)
             {
                 break;
             }
             sent += static_cast<std::size_t>(n);
         }
-        close(client);
+        net_close(client);
     }
     api.done = true;
 }
@@ -288,15 +282,20 @@ std::string rest_api_handle(App& app, std::string_view method, std::string_view 
 
 bool rest_api_start(RestApi& api, App& app, uint16_t port)
 {
-    api.fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    api.fd = net_socket(AF_INET, SOCK_STREAM, 0);
+#ifndef _WIN32 // Winsock's SO_REUSEADDR lets a second process bind the same port; a closed port is free at once there
     const int on = 1;
-    setsockopt(api.fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-    sockaddr_in addr{.sin_family = AF_INET, .sin_port = htons(port), .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
+    net_setsockopt(api.fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+#endif
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     socklen_t len = sizeof(addr);
     if (api.fd < 0 || bind(api.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(api.fd, 8) != 0
         || getsockname(api.fd, reinterpret_cast<sockaddr*>(&addr), &len) != 0)
     {
-        log_error(std::format("REST API: cannot listen on 127.0.0.1:{}: {}", port, std::strerror(errno)));
+        log_error(std::format("REST API: cannot listen on 127.0.0.1:{}: {}", port, net_error_text()));
         return false;
     }
     api.port = ntohs(addr.sin_port);
@@ -318,6 +317,6 @@ void rest_api_stop(RestApi& api, App& app)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     api.thread.join();
-    close(api.fd);
+    net_close(api.fd);
     api.fd = -1;
 }

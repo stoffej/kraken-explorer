@@ -2,7 +2,12 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET ON)
 
+# -DKRAKEN_DEPS_DIR=<dir>: <dir>/<name>.tar.gz is used instead of the download when it exists
+# (offline builds; the CMake bundled with WinLibs has no CA certificates for https).
 function(kraken_fetch name url)
+    if(KRAKEN_DEPS_DIR AND EXISTS ${KRAKEN_DEPS_DIR}/${name}.tar.gz)
+        set(url ${KRAKEN_DEPS_DIR}/${name}.tar.gz)
+    endif()
     FetchContent_Declare(${name} URL ${url} DOWNLOAD_EXTRACT_TIMESTAMP ON ${ARGN})
 endfunction()
 
@@ -56,11 +61,29 @@ target_link_libraries(implot PUBLIC imgui)
 add_library(nanosvg INTERFACE)
 target_include_directories(nanosvg SYSTEM INTERFACE ${nanosvg_SOURCE_DIR}/src)
 
-# System dependencies (pkg-config), exposed as PkgConfig::<NAME> targets
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
-pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-3.0 libnl-route-3.0)
-pkg_check_modules(PYTHON REQUIRED IMPORTED_TARGET python3-embed)
-find_package(pybind11 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
-find_package(ZLIB REQUIRED) # core/png.cpp (deflate), ui/replay.cpp (BLF containers)
+if(WIN32)
+    # No pkg-config world on Windows: zlib, pybind11 and libusb are fetched and built here, Python
+    # is the python.org install. SocketCAN (libnl) does not exist.
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    kraken_fetch(zlib     https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz)
+    kraken_fetch(pybind11 https://github.com/pybind/pybind11/archive/refs/tags/v2.13.6.tar.gz)
+    kraken_fetch(libusb   https://github.com/libusb/libusb-cmake/archive/refs/tags/v1.0.27-1.tar.gz)
+    set(LIBUSB_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(zlib libusb)
+    target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
+    set_target_properties(zlib PROPERTIES EXCLUDE_FROM_ALL ON) # the DLL: only zlibstatic is linked
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+    add_library(PkgConfig::LIBUSB ALIAS usb-1.0)
+    set(PYBIND11_FINDPYTHON ON)
+    find_package(Python 3.9 COMPONENTS Interpreter Development.Embed REQUIRED)
+    FetchContent_MakeAvailable(pybind11)
+else()
+    # System dependencies (pkg-config), exposed as PkgConfig::<NAME> targets
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
+    pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-3.0 libnl-route-3.0)
+    pkg_check_modules(PYTHON REQUIRED IMPORTED_TARGET python3-embed)
+    find_package(pybind11 CONFIG REQUIRED)
+    find_package(ZLIB REQUIRED) # core/png.cpp (deflate), ui/replay.cpp (BLF containers)
+endif()

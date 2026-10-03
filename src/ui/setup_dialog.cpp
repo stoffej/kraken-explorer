@@ -13,7 +13,9 @@
 #include "drivers/driver.h"
 #include "ui/theme.h"
 
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 namespace
 {
@@ -567,6 +569,7 @@ void draw_page(App& app, SetupDialogState& s)
 void setup_dialog_open(App& app, SetupDialogState& s)
 {
     s.work = app.setup;
+#ifndef _WIN32 // no SocketCAN there
     // Without root SocketCAN interfaces default to "configured by OS", as in the Qt build.
     if (geteuid() != 0)
     {
@@ -581,6 +584,7 @@ void setup_dialog_open(App& app, SetupDialogState& s)
             }
         }
     }
+#endif
     select(s, s.work.networks.empty() ? SetupSel::None : SetupSel::Network, s.work.networks.empty() ? -1 : 0);
     s.message.clear();
     s.open_request = true;

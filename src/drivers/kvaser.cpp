@@ -35,7 +35,13 @@
 #include "core/log.h"
 #include "drivers/driver.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include "drivers/kvaser_canlib.h"
 
@@ -43,6 +49,16 @@ const Canlib* canlib_load()
 {
     static const Canlib* lib = []() -> const Canlib*
     {
+#ifdef _WIN32
+        // canlib32.dll is the 64-bit library too; the Kvaser driver installer puts it in System32.
+        const HMODULE so = LoadLibraryA("canlib32.dll");
+        if (so == nullptr)
+        {
+            log_info("Kvaser: canlib32.dll not found, install the Kvaser drivers for Kvaser channels");
+            return nullptr;
+        }
+        const auto dlsym = [](HMODULE dll, const char* name) { return reinterpret_cast<void*>(GetProcAddress(dll, name)); };
+#else
         void* so = dlopen("libcanlib.so.1", RTLD_NOW | RTLD_LOCAL);
         if (so == nullptr)
         {
@@ -53,6 +69,7 @@ const Canlib* canlib_load()
             log_info("Kvaser: libcanlib not installed, native Kvaser channels unavailable (USB devices still work through SocketCAN's kvaser_usb)");
             return nullptr;
         }
+#endif
         static Canlib t;
         bool ok = true;
         const auto load = [&](auto& fn, const char* name)
@@ -74,6 +91,7 @@ const Canlib* canlib_load()
         load(t.canReadWait, "canReadWait");
         load(t.canRequestChipStatus, "canRequestChipStatus");
         load(t.canReadStatus, "canReadStatus");
+        load(t.canIoCtl, "canIoCtl");
         if (!ok)
         {
             log_error("Kvaser: libcanlib is missing a function this build needs (an old linuxcan?)");
@@ -88,7 +106,8 @@ const Canlib* canlib_load()
 namespace
 {
 
-// Device timestamps count from canBusOn, 1 us per tick on linuxcan.
+// Device timestamps count from canBusOn, 1 us per tick on linuxcan (set at open on Windows,
+// where a tick is 1 ms unless asked).
 constexpr int64_t kvaser_tick_ns = 1000;
 
 struct Kvaser
@@ -213,6 +232,10 @@ bool kvaser_open(Iface& iface, const IfaceConfig& config)
         log_error(std::format("Kvaser {}: canOpenChannel failed: {}", name, h));
         return false;
     }
+#ifdef _WIN32
+    uint32_t tick_us = kvaser_tick_ns / 1000;
+    cl->canIoCtl(h, canIOCTL_SET_TIMER_SCALE, &tick_us, sizeof tick_us);
+#endif
     if (config.configure)
     {
         if (const canStatus st = cl->canSetBusParams(h, kvaser_bitrate(config.bitrate), 0, 0, 0, 0, 0); st != canOK)

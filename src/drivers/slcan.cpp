@@ -147,7 +147,11 @@ void slcan_enumerate(std::vector<IfaceInfo>& out)
 
 std::string port_path(const std::string& name)
 {
+#ifdef _WIN32
+    return name; // "COM7"
+#else
     return name.starts_with('/') ? name : "/dev/" + name;
+#endif
 }
 
 void write_cmd(Slcan& s, std::string_view cmd)

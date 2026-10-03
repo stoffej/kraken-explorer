@@ -18,6 +18,7 @@
 #include "app.h"
 #include "core/fuzzy.h"
 #include "core/log.h"
+#include "core/platform.h"
 #include "core/text.h"
 #include "db/model/can_db.h"
 #include "ui/bit_matrix.h"
@@ -935,6 +936,7 @@ void tx_generator_start(TxGenerator& gen, std::deque<Iface>& ifaces)
     if (!gen.sender.joinable())
     {
         gen.ifaces = &ifaces;
+        platform_fine_timers();
         gen.sender = std::jthread([&gen](std::stop_token stop) { tx_sender_loop(stop, gen); });
     }
 }

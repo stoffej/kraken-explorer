@@ -1,11 +1,20 @@
-# core/serial: termios wrapper (SLCAN, GrIP).
-add_library(kraken_serial STATIC serial.cpp)
+# core/serial: serial port wrapper (SLCAN, GrIP): termios, Win32 COM ports on Windows.
+add_library(kraken_serial STATIC $<IF:$<BOOL:${WIN32}>,serial_win32.cpp,serial.cpp>)
 target_include_directories(kraken_serial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..) # #include "core/serial.h"
+if(WIN32)
+    target_link_libraries(kraken_serial PRIVATE setupapi) # COM port list
+endif()
 
 # core: BusMessage POD + log ring buffer. Later core modules add to it with target_sources.
 add_library(kraken_core STATIC bus_message.cpp log.cpp)
 target_include_directories(kraken_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..) # #include "core/bus_message.h"
 target_link_libraries(kraken_core PUBLIC Threads::Threads)
+
+# core/platform: files, mappings, memory hints and directories, one implementation per OS.
+target_sources(kraken_core PRIVATE $<IF:$<BOOL:${WIN32}>,platform_win32.cpp,platform_posix.cpp>)
+if(WIN32)
+    target_link_libraries(kraken_core PRIVATE winmm) # timeBeginPeriod
+endif()
 
 # core/tasks: main-thread queue. std::move_only_function needs C++23, so only this
 # target and its users are raised from the project-wide C++20.

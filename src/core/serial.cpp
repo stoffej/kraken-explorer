@@ -108,7 +108,7 @@ bool serial_write(SerialPort &port, const void *data, size_t size)
 
 long serial_read(SerialPort &port, void *data, size_t size, std::chrono::milliseconds timeout)
 {
-    pollfd pfd{.fd = port.fd, .events = POLLIN, .revents = 0};
+    pollfd pfd{.fd = static_cast<int>(port.fd), .events = POLLIN, .revents = 0};
     const int r = ::poll(&pfd, 1, static_cast<int>(timeout.count()));
     if (r == 0 || (r < 0 && errno == EINTR))
     {

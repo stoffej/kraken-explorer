@@ -25,11 +25,13 @@
 #include "ui_test.h"
 #include "ui/tx_generator.h"
 
+#ifdef __linux__
 #include <linux/can.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
 #include <poll.h>
 #include <sys/socket.h>
+#endif
 #include <unistd.h>
 
 extern const DriverOps socketcan_driver;
@@ -369,6 +371,7 @@ TEST_CASE("on-receive row is sent once per trigger by the sender thread")
     ifaces_stop(ifaces);
 }
 
+#ifdef __linux__ // SocketCAN
 TEST_CASE("cyclic frames come out on vcan0")
 {
     if (if_nametoindex("vcan0") == 0)
@@ -429,6 +432,7 @@ TEST_CASE("cyclic frames come out on vcan0")
     CHECK(got >= 8);  // 15 due
     CHECK(got <= 18);
 }
+#endif
 
 TEST_CASE("vim keys in Active Cyclic Transmissions: j/k select, Space runs/stops, Enter expands, / searches")
 {

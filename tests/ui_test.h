@@ -4,6 +4,8 @@
 // Feed input with io.AddInputCharacter / io.AddKeyEvent, then ImGui::NewFrame() ... EndFrame().
 // Same config flags as main.cpp, so keyboard nav and docking behave as in the app.
 
+#include <string>
+
 #include <imgui.h>
 #include <implot.h>
 
@@ -26,6 +28,11 @@ struct UiTest
         int w = 0;
         int h = 0;
         io.Fonts->GetTexDataAsAlpha8(&pixels, &w, &h);
+        // The clipboard stays inside the test: on Windows ImGui's default is the real one, shared
+        // with every other test process and whatever the user copies meanwhile.
+        ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+        pio.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) { clipboard() = text; };
+        pio.Platform_GetClipboardTextFn = [](ImGuiContext*) { return clipboard().c_str(); };
         if (implot)
         {
             ImPlot::CreateContext();
@@ -38,6 +45,11 @@ struct UiTest
             ImPlot::DestroyContext();
         }
         ImGui::DestroyContext();
+    }
+    static std::string& clipboard()
+    {
+        static std::string text;
+        return text;
     }
     UiTest(const UiTest&) = delete;
     UiTest& operator=(const UiTest&) = delete;

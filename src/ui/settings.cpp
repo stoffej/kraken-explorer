@@ -13,6 +13,7 @@
 
 #include "app.h"
 #include "core/log.h"
+#include "core/platform.h"
 #include "core/text.h"
 
 namespace
@@ -44,12 +45,8 @@ void ini_write_all(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer
 
 std::filesystem::path config_dir()
 {
-    if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg != nullptr && *xdg != '\0')
-    {
-        return std::filesystem::path(xdg) / "kraken-explorer";
-    }
-    const char* home = std::getenv("HOME");
-    return home ? std::filesystem::path(home) / ".config" / "kraken-explorer" : std::filesystem::path{};
+    const std::filesystem::path dir = platform_config_dir();
+    return dir.empty() ? dir : dir / "kraken-explorer";
 }
 
 } // namespace

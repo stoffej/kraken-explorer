@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -52,8 +53,9 @@ TEST_CASE("listing and sorting a directory")
 {
     const fs::path root = fs::temp_directory_path() / ("file_dialog_test_" + std::to_string(getpid()));
     fs::remove_all(root);
-    fs::create_directories(root / "Zeta");
     fs::create_directories(root / "alpha");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // alpha is the older one even where the times below cannot be set
+    fs::create_directories(root / "Zeta");
     const auto write = [&](const char* name, std::size_t bytes) { std::ofstream(root / name) << std::string(bytes, 'x'); };
     write("b.asc", 30);
     write("A.dbc", 10);
@@ -63,8 +65,9 @@ TEST_CASE("listing and sorting a directory")
     fs::last_write_time(root / "b.asc", now - std::chrono::hours(3));
     fs::last_write_time(root / "A.dbc", now - std::chrono::hours(1));
     fs::last_write_time(root / "c.log", now - std::chrono::hours(2));
-    fs::last_write_time(root / "alpha", now - std::chrono::hours(5));
-    fs::last_write_time(root / "Zeta", now - std::chrono::hours(4));
+    std::error_code no_dir_times; // Windows: std::filesystem cannot set a directory's time
+    fs::last_write_time(root / "alpha", now - std::chrono::hours(5), no_dir_times);
+    fs::last_write_time(root / "Zeta", now - std::chrono::hours(4), no_dir_times);
 
     std::string error;
     auto entries = file_dialog_list(root, false, error);
@@ -96,6 +99,7 @@ TEST_CASE("listing and sorting a directory")
     CHECK(file_dialog_list(root / "missing", false, error).empty());
     CHECK_FALSE(error.empty());
 
+#ifndef _WIN32 // std::filesystem cannot take read access away there
     if (geteuid() != 0) // root reads anything
     {
         fs::create_directories(root / "locked");
@@ -105,6 +109,7 @@ TEST_CASE("listing and sorting a directory")
         CHECK(error.find("Cannot open") != std::string::npos);
         fs::permissions(root / "locked", fs::perms::owner_all);
     }
+#endif
     fs::remove_all(root);
 }
 

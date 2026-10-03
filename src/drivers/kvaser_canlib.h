@@ -18,7 +18,7 @@
 */
 
 
-// Kvaser CANlib (linuxcan's libcanlib) loaded at run time, so the Kvaser driver is always built
+// Kvaser CANlib (linuxcan's libcanlib, canlib32.dll of the Kvaser drivers on Windows) loaded at run time, so the Kvaser driver is always built
 // and works wherever the library is installed, without the SDK at build time. Only what the driver
 // uses is declared; the names, values and signatures are CANlib's public, stable API.
 
@@ -65,6 +65,8 @@ inline constexpr long canFD_BITRATE_2M_80P = -1002;
 inline constexpr long canFD_BITRATE_4M_80P = -1003;
 inline constexpr long canFD_BITRATE_8M_80P = -1005;
 
+inline constexpr unsigned canIOCTL_SET_TIMER_SCALE = 6; // buffer: uint32 microseconds per timestamp tick
+
 inline constexpr unsigned long canSTAT_ERROR_PASSIVE = 0x01;
 inline constexpr unsigned long canSTAT_BUS_OFF = 0x02;
 inline constexpr unsigned long canSTAT_ERROR_WARNING = 0x04;
@@ -85,8 +87,9 @@ struct Canlib
     canStatus (*canReadWait)(canHandle h, long* id, void* data, unsigned* dlc, unsigned* flags, unsigned long* time, unsigned long timeout);
     canStatus (*canRequestChipStatus)(canHandle h);
     canStatus (*canReadStatus)(canHandle h, unsigned long* flags);
+    canStatus (*canIoCtl)(canHandle h, unsigned func, void* buffer, unsigned size);
 };
 
-// The library, loaded (dlopen "libcanlib.so.1", then "libcanlib.so") and initialised on the
+// The library, loaded (dlopen "libcanlib.so.1", then "libcanlib.so"; "canlib32.dll" on Windows) and initialised on the
 // first call; nullptr when it is not installed, which the driver reports as "no channels".
 const Canlib* canlib_load();

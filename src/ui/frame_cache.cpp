@@ -19,6 +19,7 @@
 
 #include "ui/frame_cache.h"
 
+#include "core/platform.h"
 #include "core/setup.h"
 
 #include <algorithm>
@@ -36,12 +37,6 @@
 #include <numeric>
 #include <optional>
 #include <thread>
-
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/sendfile.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace
 {
@@ -168,73 +163,49 @@ void encode_block(BuildSlot& s)
     }
 }
 
-// MemAvailable: free RAM plus the page cache the kernel can drop (sysconf's free pages leave the
-// cache out, and after reading a big log nearly all RAM is cache).
-uint64_t available_ram()
-{
-    std::ifstream in("/proc/meminfo");
-    std::string key;
-    uint64_t kb = 0;
-    while (in >> key >> kb && key != "MemAvailable:")
-    {
-        in.ignore(64, '\n');
-    }
-    return key == "MemAvailable:" ? kb * 1024 : 0;
-}
-
-// Drops this mapping's whole pages of `bytes` (a parsed block of the source: never read again),
-// so they don't compete with the cache being built for RAM. Pages shared with a neighbouring
-// block are kept.
-void release(std::string_view bytes)
-{
-    const auto page = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
-    const auto from = (reinterpret_cast<uintptr_t>(bytes.data()) + page - 1) & ~(page - 1);
-    const auto to = (reinterpret_cast<uintptr_t>(bytes.data()) + bytes.size()) & ~(page - 1);
-    if (to > from)
-    {
-        madvise(reinterpret_cast<void*>(from), to - from, MADV_DONTNEED);
-    }
-}
-
-// Disk blocks for [from, to) of fd, so writes through a mapping cannot hit a full disk (SIGBUS);
-// a filesystem without fallocate just grows the file.
-bool allocate(int fd, uint64_t from, uint64_t to)
-{
-    if (to <= from)
-    {
-        return true;
-    }
-    if (fallocate(fd, 0, static_cast<off_t>(from), static_cast<off_t>(to - from)) == 0)
-    {
-        return true;
-    }
-    struct stat st{};
-    return errno == EOPNOTSUPP && fstat(fd, &st) == 0
-           && (static_cast<uint64_t>(st.st_size) >= to || ftruncate(fd, static_cast<off_t>(to)) == 0);
-}
-
-// A read-only (or shared read-write) mapping of a whole file, unmapped on scope exit.
+// A mapping of a whole file, unmapped on scope exit.
 struct Mapping
 {
-    void* p = MAP_FAILED;
+    void* p = nullptr;
     std::size_t size = 0;
     Mapping() = default;
     Mapping(const Mapping&) = delete;
     Mapping& operator=(const Mapping&) = delete;
-    ~Mapping()
-    {
-        if (p != MAP_FAILED)
-        {
-            munmap(p, size);
-        }
-    }
+    ~Mapping() { file_unmap(p, size); }
 };
 
-bool map_file(Mapping& m, int fd, std::size_t size, bool write)
+bool map_file(Mapping& m, PlatformFile f, std::size_t size, bool write)
 {
     m.size = size;
-    m.p = size == 0 ? MAP_FAILED : mmap(nullptr, size, write ? PROT_READ | PROT_WRITE : PROT_READ, write ? MAP_SHARED : MAP_PRIVATE, fd, 0);
-    return m.p != MAP_FAILED;
+    m.p = file_map(f, size, write);
+    return m.p != nullptr;
+}
+
+// A file closed on scope exit.
+struct File
+{
+    PlatformFile f = platform_no_file;
+    explicit File(PlatformFile file) : f(file) {}
+    File(const File&) = delete;
+    File& operator=(const File&) = delete;
+    ~File() { file_close(f); }
+};
+
+void grow_map_close_ptr(GrowMap* m) { grow_map_close(*m); }
+
+// tmp becomes cache. A cache that is still mapped (the same log open in another tab or instance)
+// cannot be replaced on Windows, only renamed: it is moved aside as a .tmp, which
+// frame_cache_prune removes once nobody maps it.
+bool replace_cache(const std::filesystem::path& tmp, const std::filesystem::path& cache)
+{
+    std::error_code ec;
+    std::filesystem::rename(tmp, cache, ec);
+    if (ec)
+    {
+        std::filesystem::rename(cache, cache.string() + std::format(".{}.old.tmp", platform_pid()), ec);
+        std::filesystem::rename(tmp, cache, ec);
+    }
+    return !ec;
 }
 
 uint32_t u32_at(std::string_view s, std::size_t off, bool big_endian)
@@ -363,15 +334,9 @@ uint64_t combine_hashes(std::span<const uint64_t> parts)
 std::optional<uint64_t> file_hash(const std::filesystem::path& p, uint64_t size)
 {
     const TraceFileFormat format = trace_format_from_path(p.string()).value_or(TraceFileFormat::VectorAsc); // as the loader builds
-    const int fd = open(p.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-    {
-        return std::nullopt;
-    }
+    const File f(file_open(p, FileMode::read));
     Mapping m;
-    const bool mapped = map_file(m, fd, size, false);
-    close(fd);
-    if (!mapped)
+    if (f.f == platform_no_file || !map_file(m, f.f, size, false))
     {
         return std::nullopt;
     }
@@ -413,38 +378,29 @@ void set_views(FrameCache& c, const FrameCacheHeader& h)
 
 std::atomic<int> g_saving{0}; // background saves in flight
 
-// Copies the in-memory cache (memfd) to tmp with sendfile, then renames it to cache. Detached:
-// the build has returned and the app already shows the file. An exit mid-save leaves a .tmp that
+// Copies the in-memory cache (memfd) to tmp, then renames it to cache. Detached: the build has
+// returned and the app already shows the file. An exit mid-save leaves a .tmp that
 // frame_cache_prune removes; the next open builds again.
-void save_in_background(int memfd, uint64_t size, std::filesystem::path tmp, std::filesystem::path cache)
+void save_in_background(PlatformFile memfd, uint64_t size, std::filesystem::path tmp, std::filesystem::path cache)
 {
-    const int in = fcntl(memfd, F_DUPFD_CLOEXEC, 0);
-    if (in < 0)
+    const PlatformFile in = file_dup(memfd);
+    if (in == platform_no_file)
     {
         return;
     }
     ++g_saving;
     std::thread([in, size, tmp = std::move(tmp), cache = std::move(cache)]
     {
-        const int out = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-        off_t off = 0;
-        while (out >= 0 && static_cast<uint64_t>(off) < size && sendfile(out, in, &off, size - static_cast<uint64_t>(off)) > 0)
+        const bool ok = file_copy_to(in, size, tmp);
+        file_close(in);
+        if (ok && replace_cache(tmp, cache))
         {
-        }
-        const bool ok = out >= 0 && static_cast<uint64_t>(off) == size && close(out) == 0;
-        close(in);
-        std::error_code ec;
-        if (ok)
-        {
-            std::filesystem::rename(tmp, cache, ec);
-        }
-        if (!ok || ec)
-        {
-            std::filesystem::remove(tmp, ec);
+            frame_cache_prune(cache.parent_path(), frame_cache_max_bytes, cache);
         }
         else
         {
-            frame_cache_prune(cache.parent_path(), frame_cache_max_bytes, cache);
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
         }
         if (--g_saving == 0)
         {
@@ -468,16 +424,8 @@ std::filesystem::path frame_cache_path(const std::filesystem::path& src)
     // One cache per file: a changed file (size, mtime in the header) rebuilds it in place.
     std::error_code ec;
     const std::string key = std::filesystem::weakly_canonical(src, ec).string();
-    std::filesystem::path dir;
-    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && *xdg != '\0')
-    {
-        dir = xdg;
-    }
-    else if (const char* home = std::getenv("HOME"); home != nullptr)
-    {
-        dir = std::filesystem::path(home) / ".cache";
-    }
-    else
+    std::filesystem::path dir = platform_cache_dir();
+    if (dir.empty())
     {
         dir = std::filesystem::temp_directory_path();
     }
@@ -493,23 +441,20 @@ std::expected<FrameCache, std::string> frame_cache_open(const std::filesystem::p
     {
         return std::unexpected("Cannot stat " + src.string());
     }
-    int fd = open(cache.c_str(), O_RDWR | O_CLOEXEC); // read-write to note a touched source's new mtime
-    fd = fd >= 0 ? fd : open(cache.c_str(), O_RDONLY | O_CLOEXEC);
-    FrameCacheHeader h;
-    const bool read = fd >= 0 && pread(fd, &h, sizeof h, 0) == static_cast<ssize_t>(sizeof h);
-    if (!read)
+    File f(file_open(cache, FileMode::read_write)); // read-write to note a touched source's new mtime
+    if (f.f == platform_no_file)
     {
-        if (fd >= 0)
-        {
-            close(fd);
-        }
+        f.f = file_open(cache, FileMode::read);
+    }
+    FrameCacheHeader h;
+    if (f.f == platform_no_file || !file_read_at(f.f, &h, sizeof h, 0))
+    {
         return std::unexpected("No cache");
     }
     const FrameCacheHeader want;
     const uint64_t size = std::filesystem::file_size(cache, ec);
     if (std::memcmp(h.magic, want.magic, sizeof h.magic) != 0 || h.version != want.version || h.msg_size != want.msg_size)
     {
-        close(fd);
         return std::unexpected("Old cache"); // another format version: rebuilt, but the file did not change
     }
     const bool valid = h.src_size == src_size && !ec && h.channels_off + h.channels_size <= size;
@@ -518,19 +463,17 @@ std::expected<FrameCache, std::string> frame_cache_open(const std::filesystem::p
     {
         fresh = true; // touched, same content
         h.src_mtime = src_mtime;
-        (void)!pwrite(fd, &h, sizeof h, 0); // best effort: a read-only cache just hashes again next time
+        file_write_at(f.f, &h, sizeof h, 0); // best effort: a read-only cache just hashes again next time
     }
     FrameCache c;
     c.map_size = size;
-    c.map = fresh ? mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
-    close(fd); // the mapping keeps the file
     if (!fresh)
     {
         return std::unexpected("Stale cache");
     }
-    if (c.map == MAP_FAILED)
+    c.map = file_map(f.f, size, false); // the mapping keeps the file
+    if (c.map == nullptr)
     {
-        c.map = nullptr;
         return std::unexpected("Cannot map cache");
     }
     std::filesystem::last_write_time(cache, std::filesystem::file_time_type::clock::now(), ec); // LRU mark for frame_cache_prune
@@ -545,30 +488,17 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     FrameCacheHeader h;
     h.src_size = std::filesystem::file_size(src, ec);
     h.src_mtime = mtime_ns(src, ec);
-    const int in = open(src.c_str(), O_RDONLY | O_CLOEXEC);
-    const std::unique_ptr<const int, void (*)(const int*)> close_in(&in, [](const int* fd) { if (*fd >= 0) close(*fd); });
+    const File in(file_open(src, FileMode::read));
     Mapping data;
-    if (ec || in < 0 || !map_file(data, in, h.src_size, false))
+    if (ec || in.f == platform_no_file || !map_file(data, in.f, h.src_size, false))
     {
         return std::unexpected("Cannot open file.");
     }
-    madvise(data.p, data.size, MADV_SEQUENTIAL);
+    mem_sequential(data.p, data.size);
 
     std::filesystem::create_directories(cache.parent_path(), ec);
-    const std::filesystem::path tmp = cache.string() + std::format(".{}.tmp", getpid());
-    // In memory when the cache (about 0.8 x a candump, less for binary formats) fits in half the
-    // free RAM: the disk then only has to keep up in the background.
-    const bool in_ram = h.src_size < available_ram() / 2;
-    const int out_fd = in_ram ? memfd_create("kraken-frame-cache", MFD_CLOEXEC) : open(tmp.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-    std::unique_ptr<FILE, int (*)(FILE*)> out(out_fd >= 0 ? fdopen(out_fd, "w+b") : nullptr, &std::fclose);
-    if (!out)
-    {
-        if (out_fd >= 0)
-        {
-            close(out_fd);
-        }
-        return std::unexpected("Cannot write " + tmp.string());
-    }
+    const std::filesystem::path tmp = cache.string() + std::format(".{}.tmp", platform_pid());
+    // Declared before the files and mappings: Windows cannot remove a file that is open or mapped.
     struct Remove
     {
         const std::filesystem::path& p;
@@ -582,21 +512,32 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
             }
         }
     } remove_tmp{tmp};
-    std::setvbuf(out.get(), nullptr, _IOFBF, std::size_t{4} << 20);
+    // In memory when the cache (about 0.8 x a candump, less for binary formats) fits in half the
+    // free RAM: the disk then only has to keep up in the background. Windows has no growable RAM
+    // file and does not throttle writes through a mapping, so it always builds in tmp.
+    File out(h.src_size < platform_available_ram() / 2 ? file_ram() : platform_no_file);
+    const bool in_ram = out.f != platform_no_file;
+    if (!in_ram)
+    {
+        out.f = file_open(tmp, FileMode::create);
+    }
+    if (out.f == platform_no_file)
+    {
+        return std::unexpected("Cannot write " + tmp.string());
+    }
     // Payloads longer than 8 bytes go to a second temporary file while the record count is still
-    // unknown, and are appended after the records once it is (nothing for a classic CAN log).
+    // unknown, and are copied after the records once it is (nothing for a classic CAN log).
     const std::filesystem::path tmp_overflow = std::filesystem::path(tmp).replace_extension(".ovf.tmp"); // pruned like tmp
-    std::unique_ptr<FILE, int (*)(FILE*)> overflow(std::fopen(tmp_overflow.c_str(), "w+b"), &std::fclose);
+    Remove remove_overflow{tmp_overflow};
+    std::unique_ptr<FILE, int (*)(FILE*)> overflow(std::fopen(tmp_overflow.string().c_str(), "w+b"), &std::fclose);
     if (!overflow)
     {
         return std::unexpected("Cannot write " + tmp_overflow.string());
     }
-    Remove remove_overflow{tmp_overflow};
     std::setvbuf(overflow.get(), nullptr, _IOFBF, std::size_t{1} << 20);
 
     // Pass 1: parse and encode blocks on worker threads, append them in file order.
     h.frames_off = 4096;
-    std::fseek(out.get(), static_cast<long>(h.frames_off), SEEK_SET);
     std::vector<std::string> channels;
     std::vector<FrameCacheRow> rows;
     RowIndex row_of;
@@ -613,16 +554,14 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     std::vector<BuildSlot> slots(threads);
     std::vector<uint16_t> to_global;
     // The records go straight into the output through one mapping reserved far beyond any cache
-    // (address space only), grown on disk with fallocate as blocks come in: the workers copy their
-    // own records, so the main thread no longer writes 1.5 GB per 2 GB of log through stdio.
-    uint64_t out_size = 0;
-    Mapping out_map;
-    out_map.size = std::size_t{1} << 40;
-    out_map.p = mmap(nullptr, out_map.size, PROT_READ | PROT_WRITE, MAP_SHARED, out_fd, 0);
-    if (out_map.p == MAP_FAILED)
+    // (address space only), grown on disk as blocks come in: the workers copy their own records,
+    // so the main thread no longer writes 1.5 GB per 2 GB of log through stdio.
+    GrowMap out_map;
+    if (!grow_map_open(out_map, out.f, std::size_t{1} << 40, in_ram))
     {
         return std::unexpected("Cannot map " + tmp.string());
     }
+    const std::unique_ptr<GrowMap, void (*)(GrowMap*)> close_out_map(&out_map, &grow_map_close_ptr);
     // Appends an encoded block: channels and rows renumbered to the file's. False: write failed.
     const auto append = [&](BuildSlot& s)
     {
@@ -679,17 +618,12 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
         sorted = sorted && s.sorted && s.recs.front().ts_ns >= last_ts;
         last_ts = s.recs.back().ts_ns;
         const uint64_t end = h.frames_off + (h.frame_count + s.recs.size()) * sizeof(FrameCacheRec);
-        if (end > out_size)
+        // Blocks really allocated (a full disk fails here, not as SIGBUS on a mapped write later).
+        if (end > out_map.size && !grow_map_grow(out_map, std::max<uint64_t>(end, out_map.size * 2)))
         {
-            // Blocks really allocated (a full disk fails here, not as SIGBUS on a mapped write later).
-            const uint64_t grown = std::max<uint64_t>(end, out_size * 2);
-            if (in_ram ? ftruncate(out_fd, static_cast<off_t>(grown)) != 0 : !allocate(out_fd, out_size, grown))
-            {
-                return false;
-            }
-            out_size = grown;
+            return false;
         }
-        s.write_to = static_cast<std::byte*>(out_map.p) + h.frames_off + h.frame_count * sizeof(FrameCacheRec);
+        s.write_to = out_map.base + h.frames_off + h.frame_count * sizeof(FrameCacheRec);
         h.frame_count += s.recs.size();
         return true;
     };
@@ -701,9 +635,6 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     {
         constexpr uint64_t chunk = uint64_t{16} << 20;
         constexpr uint64_t window = uint64_t{1} << 30; // ponytail: fixed 1 GB ahead of the parse, tune if a faster disk outruns it
-        std::vector<char> sink(chunk); // pread, not readahead(2): that one stays at read_ahead_kb-sized requests
-        const auto page = static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
-        std::vector<unsigned char> resident(chunk / page);
         for (uint64_t off = 0; off < h.src_size && !stop.stop_requested();)
         {
             if (off > consumed.load(std::memory_order_relaxed) + window)
@@ -711,12 +642,7 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
-            // A warm file (already in the page cache) is not read again: copying it cost a warm build 12 %.
-            const uint64_t n = std::min(chunk, h.src_size - off);
-            const bool cached = mincore(static_cast<char*>(data.p) + off, n, resident.data()) == 0
-                                && std::all_of(resident.begin(), resident.begin() + static_cast<std::ptrdiff_t>((n + page - 1) / page),
-                                               [](unsigned char r) { return (r & 1) != 0; });
-            if (!cached && pread(in, sink.data(), n, static_cast<off_t>(off)) <= 0)
+            if (!mem_prefetch(in.f, data.p, off, static_cast<std::size_t>(std::min(chunk, h.src_size - off))))
             {
                 break;
             }
@@ -733,7 +659,7 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
             hashes[k] = block_hash(blocks[k]); // first: the parse then reads the bytes from cache
             const std::string_view records = k == 0 ? blocks[0].substr(header.size()) : blocks[k];
             replay_parse_into(header, records, format, s.f, {.stop = progress.stop});
-            release(blocks[k]);
+            mem_release(blocks[k].data(), blocks[k].size());
             encode_block(s);
             if (progress.frames != nullptr)
             {
@@ -795,25 +721,6 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     {
         return std::unexpected("Failed to parse trace file or file is empty.");
     }
-    h.overflow_off = align8(h.frames_off + h.frame_count * sizeof(FrameCacheRec));
-    std::fseek(out.get(), static_cast<long>(h.overflow_off), SEEK_SET);
-    std::rewind(overflow.get());
-    for (std::vector<char> buf(std::size_t{1} << 20);;)
-    {
-        const std::size_t n = std::fread(buf.data(), 1, buf.size(), overflow.get());
-        if (n == 0)
-        {
-            break;
-        }
-        if (std::fwrite(buf.data(), 1, n, out.get()) != n)
-        {
-            return std::unexpected("Write failed (disk full?)");
-        }
-    }
-    if (std::fflush(out.get()) != 0)
-    {
-        return std::unexpected("Write failed (disk full?)");
-    }
 
     // Layout of the rest, then map the whole file and fill it in place.
     std::string names;
@@ -821,20 +728,29 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     {
         names += c + '\n';
     }
+    h.overflow_off = align8(h.frames_off + h.frame_count * sizeof(FrameCacheRec));
     h.row_count = rows.size();
     h.rows_off = align8(h.overflow_off + h.overflow_count * sizeof(FrameCachePayload));
     h.row_frames_off = h.rows_off + h.row_count * sizeof(FrameCacheRow);
     h.channels_off = h.row_frames_off + h.frame_count * sizeof(uint32_t);
     h.channels_size = names.size();
-    const int fd = fileno(out.get());
-    Mapping map;
     const uint64_t total = h.channels_off + h.channels_size;
-    if ((!in_ram && !allocate(fd, std::min(out_size, total), total)) || ftruncate(fd, static_cast<off_t>(total)) != 0
-        || !map_file(map, fd, total, true))
+    if (!grow_map_grow(out_map, total))
+    {
+        return std::unexpected("Write failed (disk full?)");
+    }
+    grow_map_close(out_map); // Windows resizes no file that is mapped
+    Mapping map;
+    if (!file_resize(out.f, total) || !map_file(map, out.f, total, true))
     {
         return std::unexpected("Cannot map " + tmp.string());
     }
     auto* base = static_cast<std::byte*>(map.p);
+    std::rewind(overflow.get()); // the long payloads go after the records
+    if (std::fread(base + h.overflow_off, sizeof(FrameCachePayload), h.overflow_count, overflow.get()) != h.overflow_count)
+    {
+        return std::unexpected("Write failed (disk full?)");
+    }
     const std::span frames(reinterpret_cast<FrameCacheRec*>(base + h.frames_off), h.frame_count);
     if (!sorted)
     {
@@ -957,22 +873,24 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     }
     FrameCache c;
     c.map_size = total;
-    c.map = mmap(nullptr, total, PROT_READ, MAP_SHARED, fd, 0);
-    if (c.map == MAP_FAILED)
+    c.map = file_map(out.f, total, false);
+    if (c.map == nullptr)
     {
         return std::unexpected("Cannot map " + tmp.string());
     }
+    file_unmap(map.p, map.size);
+    map.p = nullptr;
     set_views(c, h);
     if (in_ram)
     {
         remove_tmp.keep = true; // tmp is the background save's now
-        save_in_background(fd, total, tmp, cache);
+        save_in_background(out.f, total, tmp, cache);
     }
     else
     {
-        out.reset();
-        std::filesystem::rename(tmp, cache, ec);
-        if (ec)
+        file_close(out.f);
+        out.f = platform_no_file;
+        if (!replace_cache(tmp, cache))
         {
             frame_cache_close(c);
             return std::unexpected("Cannot write " + cache.string());
@@ -1028,10 +946,7 @@ void frame_cache_prune(const std::filesystem::path& dir, uint64_t max_bytes, con
 
 void frame_cache_close(FrameCache& c)
 {
-    if (c.map != nullptr)
-    {
-        munmap(c.map, c.map_size);
-    }
+    file_unmap(c.map, c.map_size);
     c = {};
 }
 

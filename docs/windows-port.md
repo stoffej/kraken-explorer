@@ -1,9 +1,86 @@
-# Windows port plan
+# Windows port
 
 Goal: a Windows x64 build of Kraken Explorer that colleagues can unzip and run: open and convert
 logs, graph, DBC editor, Replay, Python scripts, and live CAN through the adapters they own.
 
-Status (2026-10-03): plan only. Linux is the only supported platform today.
+Status (2026-10-03): builds with MinGW-w64 GCC, all 56 ctest areas that run on Windows pass, the
+zip from `scripts/build_win_zip.ps1` installs and runs Python scripts without a Python install.
+Live CAN is untested on Windows. What is left is under "To do".
+
+## Build
+
+Toolchain: [WinLibs](https://winlibs.com) GCC (UCRT, posix threads; it brings cmake and ninja) and
+the python.org Python (3.9+) the exe links against. Put `mingw64\bin` first in `PATH`.
+
+```bat
+cmake -S <source> -B build -G Ninja -DKRAKEN_DEPS_DIR=C:\deps
+cmake --build build
+ctest --test-dir build --output-on-failure
+build\src\kraken-explorer.exe
+```
+
+* `-DKRAKEN_DEPS_DIR=<dir>`: WinLibs' cmake has no CA certificates and cannot download over https.
+  Put each dependency of `cmake/deps.cmake` there as `<name>.tar.gz` (download them with a browser
+  or `curl`).
+* The source tree may be on a WSL share (`\\wsl.localhost\Ubuntu\...`), the build directory must be
+  on a Windows disk.
+* The exe needs `python3xx.dll`: Python's directory in `PATH`, or the embeddable package next to
+  the exe (what the zip has).
+* Settings are in `%APPDATA%\kraken-explorer`, the log cache in `%LOCALAPPDATA%\kraken-explorer`;
+  `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` override them as on Linux.
+
+## Install
+
+```bat
+set CMAKE_ARGS=-DKRAKEN_DEPS_DIR=C:\deps
+powershell -ExecutionPolicy Bypass -File scripts\build_win_zip.ps1 -Build C:\build-release
+```
+
+gives `kraken-explorer-<version>-win64.zip` (14 MB): the stripped Release exe, the embeddable Python
+of the version it was linked against, `examples\`, `install.bat` and `uninstall.bat`. The user
+unzips it and either runs `kraken-explorer.exe` in place or double-clicks `install.bat`, which
+copies the folder to `%LOCALAPPDATA%\Programs\Kraken Explorer` and adds a Start menu shortcut (per
+user, no administrator rights; run it again to upgrade). The exe is not signed: SmartScreen warns
+on first run.
+
+## To do
+
+Bugs found in the review of the port, most important first:
+
+1. **Kvaser timestamps wrap after 71.6 min** (`drivers/kvaser.cpp`): `unsigned long` is 32 bits on
+   Windows and the tick is 1 us. Unwrap in `kvaser_read`.
+2. **"New vcan" and the SocketCAN link buttons are still drawn** (`ui/can_status.cpp`,
+   `ui/setup_dialog.cpp`) and only give an `ip` error. Hide them on Windows.
+3. **Cache replacement** (`replace_cache`, `ui/frame_cache.cpp`): the old mapped cache is moved to
+   one fixed name, so a second rebuild of the same log in one process fails; no retry when
+   antivirus holds the new file for a moment.
+4. **Timer resolution** (`platform_win32.cpp`): `timeBeginPeriod(1)` is ignored by Windows 11 while
+   the window is minimized, cyclic TX and Replay then fall back to 15.6 ms.
+5. **UTF-8 only through the manifest**: the test binaries do not link it (a non-ASCII user name
+   breaks them), Windows before 10 1903 does not honour it.
+6. To check on the machine: resolution of `now_ns()` (system_clock on MinGW) for RX timestamps;
+   `std::chrono::current_zone()` without try/catch in log window, file dialog, recorder and
+   Replay.
+
+Missing features:
+
+* **PEAK driver**: `pcan.cpp` against PCAN-Basic (`PCANBasic.dll`, loaded at run time like
+  `kvaser.cpp`), CAN and CAN FD. PCAN-Basic and the PEAK device driver must be installed.
+* Live CAN test of Kvaser, SLCAN, GrIP, CANblaster and the libusb devices on Windows.
+* GUI subsystem exe (a console window opens when started from Explorer), an icon, dark title bar,
+  `longPathAware`.
+* CI job on `windows-latest`: build, ctest, upload the zip.
+* Vector XL (`vxlapi64.dll`) if colleagues use Vector hardware. Installer with an uninstall entry
+  (Inno Setup) and code signing.
+
+Performance (numbers in `docs/performance-baseline.md`): playing into the trace runs at 14–19M
+frames/s against 41–45M on Linux and the first decode over a mapped cache is about 10x slower.
+Not yet profiled; page faults on the mapping and on fresh trace memory are the first suspect.
+There is no RAM-backed cache build on Windows (`file_ram` returns none), every first load writes
+the cache to disk.
+
+Deliberate simplifications in the Windows code are mostly not marked `// ponytail:` yet (one
+marker, in `serial_win32.cpp`).
 
 ## What is already portable
 
@@ -25,6 +102,10 @@ build on Windows. Most of `src/` is plain C++20/23 with `std::filesystem`, `std:
 Smaller spots: `$HOME` / `$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME` (settings, file dialog, cache),
 `/proc/self/exe` (script window), `popen("gdbus ...")` for the dark-theme portal (theme.cpp), the
 SocketCAN link / vcan buttons (can_status), pkexec handling (driver.h).
+
+## Original plan
+
+Kept for the reasoning. MinGW-w64 was chosen over the MSVC + vcpkg toolchain listed here.
 
 ## Steps
 
@@ -60,17 +141,6 @@ SocketCAN link / vcan buttons (can_status), pkexec handling (driver.h).
 1. Offline analyzer: logs (frame cache), conversion, graph, DBC/DBF/SYM, Replay, Python.
 2. Live CAN: Kvaser, PEAK, SLCAN, gs_usb.
 3. Installer and signing.
-
-## Preparing the Windows machine (for building over SSH)
-
-1. Settings > System > Optional features > add **OpenSSH Server**; start the `sshd` service and set
-   it to Automatic. Allow port 22 in the firewall (the feature adds the rule).
-2. Install **Visual Studio 2022 Build Tools** with "Desktop development with C++" (MSVC, Windows SDK,
-   CMake, Ninja).
-3. Install **Git for Windows** and **Python 3.12** (for the format-compat checks).
-4. Add the Linux machine's `~/.ssh/id_ed25519.pub` to `C:\Users\<user>\.ssh\authorized_keys`
-   (for an administrator account: `C:\ProgramData\ssh\administrators_authorized_keys`).
-5. Tell Claude the machine's IP and user name; builds then run there like on the Linux build box.
 
 ## Open questions
 

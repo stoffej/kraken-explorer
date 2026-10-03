@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "test_env.h"
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -26,7 +28,7 @@ std::filesystem::path scratch()
 {
     const auto dir = std::filesystem::temp_directory_path() / std::format("kraken_convert_test_{}", getpid());
     std::filesystem::create_directories(dir);
-    setenv("XDG_CACHE_HOME", (dir / "cache").c_str(), 1);
+    test_setenv("XDG_CACHE_HOME", (dir / "cache"));
     return dir;
 }
 

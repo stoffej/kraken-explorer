@@ -11,13 +11,8 @@
 #include <thread>
 #include <vector>
 
+#include "core/net.h"
 #include "drivers/driver.h"
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 extern const DriverOps canblast_driver;
 bool is_discovery(const char* data, std::size_t size);
@@ -27,13 +22,13 @@ namespace
 
 void send_to(uint16_t port, const void* data, std::size_t size)
 {
-    const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    const int fd = net_socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    sendto(fd, data, size, 0, reinterpret_cast<const sockaddr*>(&a), sizeof(a));
-    close(fd);
+    sendto(fd, static_cast<const char*>(data), static_cast<int>(size), 0, reinterpret_cast<const sockaddr*>(&a), sizeof(a));
+    net_close(fd);
 }
 
 void send_str(uint16_t port, const std::string& s) { send_to(port, s.data(), s.size()); }
@@ -93,7 +88,7 @@ TEST_CASE("canblast: discovery, heartbeat and frames")
     CHECK(infos[0].bitrates.size() == 30);
 
     // Heartbeat listener stands in for the server's port 20002.
-    const int hb = socket(AF_INET, SOCK_DGRAM, 0);
+    const int hb = net_socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(20002);
@@ -147,12 +142,11 @@ TEST_CASE("canblast: discovery, heartbeat and frames")
     CHECK(got[1].dlc == 9);
     CHECK(got[1].data[11] == 11);
 
-    pollfd p{.fd = hb, .events = POLLIN, .revents = 0};
-    REQUIRE(poll(&p, 1, 1000) == 1);
+    REQUIRE(net_wait_readable(hb, 1000) == 1);
     std::array<char, 32> hbuf{};
     const auto hn = recv(hb, hbuf.data(), hbuf.size(), 0);
     CHECK(std::string(hbuf.data(), static_cast<std::size_t>(hn)) == "Heartbeat");
-    close(hb);
+    net_close(hb);
 
     IfaceStats st;
     canblast_driver.stats(iface, st);

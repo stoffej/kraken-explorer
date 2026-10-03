@@ -6,6 +6,12 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h> // theme_os_prefers_dark: registry
+#endif
+
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h> // ImFontLoader, atlas packing
@@ -374,6 +380,14 @@ void theme_logo(float size)
 
 bool theme_os_prefers_dark()
 {
+#ifdef _WIN32
+    // Settings > Personalization > Colors > app mode. One read at startup, as below.
+    DWORD light = 1;
+    DWORD size = sizeof light;
+    RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",
+                 RRF_RT_REG_DWORD, nullptr, &light, &size);
+    return light == 0;
+#else
     // org.freedesktop.appearance color-scheme: 0 no preference, 1 dark, 2 light.
     // ponytail: gdbus subprocess instead of linking libdbus; one call at startup, no live updates. Portal signal via libdbus if live switching is wanted.
     FILE* p = popen("gdbus call --session --timeout 1 --dest org.freedesktop.portal.Desktop"
@@ -390,4 +404,5 @@ bool theme_os_prefers_dark()
     pclose(p);
     const char* v = std::strstr(out, "uint32 ");
     return n > 0 && v && v[7] == '1';
+#endif
 }

@@ -34,14 +34,9 @@
 #include <vector>
 
 #include "core/log.h"
+#include "core/net.h"
 #include "core/socket_can.h"
 #include "drivers/driver.h"
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 bool canblast_enabled = false;
 
@@ -79,7 +74,7 @@ struct CanBlast
 // UDP socket bound to INADDR_ANY:port, -1 on failure.
 int bind_udp(uint16_t port, bool share)
 {
-    const int fd = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    const int fd = net_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (fd < 0)
     {
         return -1;
@@ -87,7 +82,7 @@ int bind_udp(uint16_t port, bool share)
     if (share)
     {
         const int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        net_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     }
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -95,7 +90,7 @@ int bind_udp(uint16_t port, bool share)
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0)
     {
-        ::close(fd);
+        net_close(fd);
         return -1;
     }
     return fd;
@@ -116,24 +111,22 @@ void canblast_enumerate(std::vector<IfaceInfo>& out)
     ip_mreq group{};
     inet_pton(AF_INET, discovery_group, &group.imr_multiaddr);
     group.imr_interface.s_addr = htonl(INADDR_ANY);
-    setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &group, sizeof(group));
+    net_setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &group, sizeof(group));
 
     // ponytail: blocks the main thread for the whole discovery window, as the Qt driver did; a worker if the freeze at Reload bothers.
     std::vector<std::string> servers;
     const auto deadline = Clock::now() + discovery_time;
     for (auto now = Clock::now(); now < deadline; now = Clock::now())
     {
-        pollfd p{.fd = fd, .events = POLLIN, .revents = 0};
         const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
-        if (::poll(&p, 1, static_cast<int>(left) + 1) <= 0)
+        if (net_wait_readable(fd, static_cast<int>(left) + 1) <= 0)
         {
             continue;
         }
         std::array<char, 1024> buf{};
         sockaddr_in from{};
         socklen_t from_len = sizeof(from);
-        const auto n = ::recvfrom(fd, buf.data(), buf.size(), 0,
-                                  reinterpret_cast<sockaddr*>(&from), &from_len);
+        const auto n = net_recvfrom(fd, buf.data(), buf.size(), false, reinterpret_cast<sockaddr*>(&from), &from_len);
         if (n <= 0)
         {
             continue;
@@ -150,7 +143,7 @@ void canblast_enumerate(std::vector<IfaceInfo>& out)
             servers.emplace_back(ip.data());
         }
     }
-    ::close(fd);
+    net_close(fd);
     log_info(std::format("CANblaster: found {} server(s)", servers.size()));
 
     std::vector<CanTiming> bitrates;
@@ -200,7 +193,7 @@ void canblast_close(Iface& iface)
 {
     if (iface.impl)
     {
-        ::close(iface_impl<CanBlast>(iface).fd);
+        net_close(iface_impl<CanBlast>(iface).fd);
     }
     iface.impl.reset();
 }
@@ -229,11 +222,10 @@ int canblast_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
     auto& s = iface_impl<CanBlast>(iface);
     heartbeat(s);
 
-    pollfd p{.fd = s.fd, .events = POLLIN, .revents = 0};
-    const int rv = ::poll(&p, 1, std::min(timeout_ms, 1000));
+    const int rv = net_wait_readable(s.fd, std::min(timeout_ms, 1000));
     if (rv <= 0)
     {
-        return rv == 0 || errno == EINTR ? 0 : -1;
+        return rv == 0 ? 0 : -1;
     }
 
     int n = 0;
@@ -242,8 +234,7 @@ int canblast_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
         std::array<uint8_t, socket_can::canfd_mtu> buf{};
         sockaddr_in from{};
         socklen_t from_len = sizeof(from);
-        const auto nbytes = ::recvfrom(s.fd, buf.data(), buf.size(), MSG_DONTWAIT,
-                                       reinterpret_cast<sockaddr*>(&from), &from_len);
+        const auto nbytes = net_recvfrom(s.fd, buf.data(), buf.size(), true, reinterpret_cast<sockaddr*>(&from), &from_len);
         if (nbytes < 0)
         {
             break; // EAGAIN; a UDP socket has no hang-up to report

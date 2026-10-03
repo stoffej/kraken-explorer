@@ -38,6 +38,7 @@
 #include "app.h"
 #include "core/autosar_e2e.h"
 #include "core/log.h"
+#include "core/platform.h"
 #include "core/trace_file_format.h"
 #include "core/trace_file_writer.h"
 
@@ -270,10 +271,10 @@ void set_bundled_python_home()
     {
         return;
     }
-#ifdef __linux__
+#ifndef _WIN32 // there Python finds a runtime shipped next to the executable (python3xx.dll) by itself
     std::error_code ec;
-    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (ec)
+    const fs::path exe = platform_exe_path();
+    if (exe.empty())
     {
         return;
     }

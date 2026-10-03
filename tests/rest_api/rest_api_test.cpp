@@ -5,12 +5,8 @@
 #include <string>
 #include <thread>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include "app.h"
+#include "core/net.h"
 #include "core/rest_api.h"
 
 TEST_CASE("json_get: strings with escapes, numbers, booleans, missing keys")
@@ -69,21 +65,24 @@ TEST_CASE("HTTP round trip on 127.0.0.1: the request runs on the main thread")
     std::string reply;
     std::jthread client([&]
     {
-        const int fd = socket(AF_INET, SOCK_STREAM, 0);
-        sockaddr_in addr{.sin_family = AF_INET, .sin_port = htons(api.port), .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
+        const int fd = net_socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(api.port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         REQUIRE(connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
         const std::string request = "POST /measurement/start HTTP/1.0\r\nContent-Length: 0\r\n\r\n";
-        REQUIRE(write(fd, request.data(), request.size()) == static_cast<ssize_t>(request.size()));
+        REQUIRE(send(fd, request.data(), static_cast<int>(request.size()), 0) == static_cast<int>(request.size()));
         for (char buf[1024];;)
         {
-            const ssize_t n = read(fd, buf, sizeof(buf));
+            const auto n = recv(fd, buf, sizeof(buf), 0);
             if (n <= 0)
             {
                 break;
             }
             reply.append(buf, static_cast<std::size_t>(n));
         }
-        close(fd);
+        net_close(fd);
     });
     while (client.joinable() && reply.empty()) // the main thread's job: run the request
     {

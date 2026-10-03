@@ -1,4 +1,4 @@
-// Thin serial port wrapper over termios.
+// Thin serial port wrapper: termios (serial.cpp), Win32 COM ports (serial_win32.cpp).
 // Always 8N1, no flow control, raw mode - the only setup SLCAN and GrIP use.
 #pragma once
 
@@ -10,13 +10,13 @@
 
 struct SerialPort
 {
-    int fd = -1;
+    intptr_t fd = -1; // file descriptor; a HANDLE on Windows
     std::string error; // last error message, set when a call fails
 };
 
 struct SerialPortInfo
 {
-    std::string name;   // "/dev/ttyACM0", passed as is to serial_open()
+    std::string name;   // "/dev/ttyACM0" (Windows: "COM7"), passed as is to serial_open()
     uint16_t vid = 0;   // 0 when not a USB device
     uint16_t pid = 0;
     std::string serial; // USB serial number, empty when unknown

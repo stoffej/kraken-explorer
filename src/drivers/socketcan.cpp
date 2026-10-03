@@ -175,19 +175,6 @@ void socketcan_enumerate(std::vector<IfaceInfo>& out)
     nl_links_close(nl);
 }
 
-// First existing absolute path: pkexec's polkit rule (packaging/) matches on it.
-std::string ip_executable()
-{
-    for (const char* p : {"/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"})
-    {
-        if (access(p, X_OK) == 0)
-        {
-            return p;
-        }
-    }
-    return "ip";
-}
-
 } // namespace
 
 // ponytail: at Start (socketcan_configure) this blocks the main thread while pkexec asks for
@@ -261,32 +248,11 @@ IpResult socketcan_run_ip(const std::vector<std::string>& args)
 namespace
 {
 
-std::string sample_point_arg(unsigned per_mille)
-{
-    return std::format("{:.3f}", per_mille / 1000.0);
-}
-
-// `ip link set <name> up type can ...` with the bit timing of c (ip-link(8) CAN syntax).
-std::vector<std::string> can_up_args(const std::string& name, const IfaceConfig& c)
-{
-    std::vector<std::string> up = {"link", "set", name, "up", "type", "can",
-                                   "bitrate", std::to_string(c.bitrate), "sample-point", sample_point_arg(c.sample_point)};
-    if (c.can_fd)
-    {
-        up.insert(up.end(), {"dbitrate", std::to_string(c.fd_bitrate), "dsample-point",
-                             sample_point_arg(c.fd_sample_point), "fd", "on"});
-    }
-    // Always explicit: the kernel keeps a ctrlmode flag until told otherwise (auto-baud sets it).
-    up.insert(up.end(), {"listen-only", c.listen_only ? "on" : "off",
-                         "restart-ms", c.auto_restart ? std::to_string(c.auto_restart_ms) : "0"});
-    return up;
-}
-
 // `ip link set down`, then up with the bit timing of c.
 void socketcan_set_timing(const std::string& name, const IfaceConfig& c)
 {
     socketcan_run_ip({"link", "set", name, "down"});
-    socketcan_run_ip(can_up_args(name, c));
+    socketcan_run_ip(ip_link_args(LinkOp::Up, name, &c));
 }
 
 void socketcan_configure(const std::string& name, const IfaceConfig& c)
@@ -609,77 +575,6 @@ void socketcan_stats(Iface& iface, IfaceStats& out)
     nl_links_close(nl);
 }
 
-} // namespace
-
-std::vector<std::string> ip_link_args(LinkOp op, const std::string& name, const IfaceConfig* timing)
-{
-    switch (op)
-    {
-    case LinkOp::Up:
-        if (timing)
-        {
-            return can_up_args(name, *timing);
-        }
-        return {"link", "set", name, "up"};
-    case LinkOp::Down:
-        return {"link", "set", name, "down"};
-    case LinkOp::AddVcan:
-        return {"link", "add", "dev", name, "type", "vcan"};
-    case LinkOp::Delete:
-        return {"link", "delete", name};
-    }
-    return {};
-}
-
-std::vector<std::string> ip_command(const std::vector<std::string>& args, bool root)
-{
-    std::vector<std::string> cmd;
-    if (!root)
-    {
-        cmd.emplace_back("pkexec");
-    }
-    cmd.push_back(ip_executable());
-    cmd.insert(cmd.end(), args.begin(), args.end());
-    return cmd;
-}
-
-std::string next_vcan_name(bool (*taken)(const std::string& name))
-{
-    for (unsigned n = 0;; ++n)
-    {
-        std::string name = std::format("vcan{}", n);
-        if (!taken(name))
-        {
-            return name;
-        }
-    }
-}
-
-IpResult ip_result_classify(int exit_code, std::string_view err) noexcept
-{
-    if (exit_code == 0)
-    {
-        return IpResult::ok;
-    }
-    if (exit_code == 126)
-    {
-        return IpResult::denied;
-    }
-    if (exit_code == 127 && err.find("authentication agent") != std::string_view::npos)
-    {
-        return IpResult::no_agent;
-    }
-    return IpResult::failed;
-}
-
-bool autobaud_hit(const BaudProbe& p) noexcept
-{
-    return p.frames >= 2 && p.errors == 0;
-}
-
-namespace
-{
-
 // ponytail: fixed listen window per rate; a bus slower than ~2 frames per 500 ms reads as
 // idle. Make it longer (or a setting) if sparse buses matter.
 constexpr auto autobaud_window = std::chrono::milliseconds(500);
@@ -747,7 +642,7 @@ AutobaudResult socketcan_autobaud(const std::string& name, IfaceConfig timing)
     }
     log_info(std::format("auto-baud {}: no traffic or no matching bitrate", name));
     socketcan_run_ip({"link", "set", name, "down"});
-    std::vector<std::string> restore = can_up_args(name, timing);
+    std::vector<std::string> restore = ip_link_args(LinkOp::Up, name, &timing);
     restore.erase(restore.begin() + 3); // drop "up": restore the timing, leave the link down
     socketcan_run_ip(restore);
     return {};

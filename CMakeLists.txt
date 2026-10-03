@@ -20,6 +20,12 @@ if(KRAKEN_SANITIZE)
 endif()
 
 add_compile_definitions(VERSION_STRING="${PROJECT_VERSION}")
+if(WIN32)
+    add_compile_definitions(_WIN32_WINNT=0x0A00) # Windows 10 API level (PrefetchVirtualMemory, WSAPoll, inet_pton)
+    if(MINGW)
+        add_link_options(-static) # libstdc++, libgcc and winpthread into the exe: only python3xx.dll ships beside it
+    endif()
+endif()
 
 include(cmake/deps.cmake)
 

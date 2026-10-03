@@ -5,6 +5,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "test_env.h"
+
 #include <chrono>
 #include <thread>
 
@@ -87,7 +89,7 @@ struct FileView
     FileView()
     {
         std::filesystem::create_directories(dir);
-        setenv("XDG_CACHE_HOME", dir.c_str(), 1);
+        test_setenv("XDG_CACHE_HOME", dir);
         const std::filesystem::path src = dir / "two_ids.log";
         std::ofstream(src, std::ios::binary) << candump_log();
         const std::filesystem::path kfc = frame_cache_path(src);

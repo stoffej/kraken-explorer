@@ -265,12 +265,14 @@ int main(int argc, char** argv)
     // GLFW cannot place windows on Wayland, so imgui_impl_glfw turns multi-viewports off there.
     // Prefer X11 (XWayland) whenever an X display exists so floating docks become OS windows.
     // ponytail: XWayland scales blurry on fractional HiDPI; drop this if that matters more.
+#ifndef _WIN32
     if (smoke_frames >= 0 || std::getenv("DISPLAY") != nullptr)
     {
         // Smoke runs are headless under xvfb-run, which leaves WAYLAND_DISPLAY set: without
         // this GLFW would open on the real Wayland desktop (and pull in libdecor's GTK plugin).
         glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
     }
+#endif
     if (!glfwInit())
     {
         return 1;

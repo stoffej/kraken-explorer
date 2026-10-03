@@ -18,6 +18,7 @@
 #include <zlib.h>
 
 #include "app.h"
+#include "core/platform.h"
 #include "core/text.h"
 #include "core/trace_line_format.h"
 #include "ui/depth_gauge.h"
@@ -1740,6 +1741,7 @@ void replay_start(Replay& r, std::deque<Iface>& ifaces, Tasks& tasks)
     r.play_mapping = r.mapping;
     r.position = 0;
     r.running = true;
+    platform_fine_timers();
     r.player = std::jthread(replay_run, std::ref(r), std::ref(ifaces), std::ref(tasks),
                             r.fast ? 0.0 : std::clamp(static_cast<double>(r.speed), 0.1, 10.0), r.loop);
 }

@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "test_env.h"
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -119,7 +121,7 @@ TEST_CASE("strip removes only the Kraken sections")
 TEST_CASE("settings_init + settings_save persist through the ini handler")
 {
     const auto dir = temp_dir();
-    setenv("XDG_CONFIG_HOME", dir.c_str(), 1);
+    test_setenv("XDG_CONFIG_HOME", dir);
     {
         ImGui::CreateContext();
         auto a = std::make_unique<App>();

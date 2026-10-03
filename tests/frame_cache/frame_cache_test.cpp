@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "test_env.h"
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -377,7 +379,7 @@ TEST_CASE("frame cache prune drops the least recently opened .kfc files, keeps t
 {
     const auto dir = scratch("cache_home");
     std::filesystem::create_directories(dir);
-    setenv("XDG_CACHE_HOME", dir.c_str(), 1);
+    test_setenv("XDG_CACHE_HOME", dir);
     const auto src_old = scratch("old.log");
     const auto src_new = scratch("new.log");
     write(src_old, "(1.0) vcan0 111#01\n");

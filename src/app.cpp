@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "core/log.h"
+#include "core/platform.h"
 #include "core/trace_file_writer.h"
 #include "drivers/grip.h"
 #include "ui/help_overlay.h"
@@ -300,8 +301,8 @@ void app_init_interfaces(App& app)
     app.recorder.iface_name = [&app](uint16_t i) { return i < app.ifaces.size() ? app.ifaces[i].info.name : std::string{}; };
     if (app.recorder.config.folder.empty()) // not in the settings ini yet
     {
-        const char* home = std::getenv("HOME");
-        app.recorder.config.folder = (std::filesystem::path(home ? home : ".") / "Documents" / "KrakenExplorer").string();
+        const std::filesystem::path home = platform_home_dir();
+        app.recorder.config.folder = ((home.empty() ? "." : home) / "Documents" / "KrakenExplorer").string();
     }
     app.rx_consumers.push_back({.fn = recorder_rx_consumer, .user = &app.recorder});
     app.rx_consumers.push_back({.fn = python_rx_consumer, .user = &app.python});

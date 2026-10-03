@@ -1,4 +1,4 @@
-# Performance baseline (Linux)
+# Performance baseline
 
 The reference numbers for the Windows port: the same machine, the same logs, the same benchmarks.
 A Windows build should land close to these. Where it is clearly slower, the platform layer (file
@@ -84,6 +84,30 @@ How the first load gets there (`src/ui/frame_cache.cpp`):
 | BLF | 2.1–2.2 s | 2.1 GB |
 
 Each format is encoded in parallel chunks of 64k frames on up to 16 threads and written in order.
+
+## Windows (2026-10-03)
+
+Same machine, Windows 11, MinGW-w64 GCC 16.2, RelWithDebInfo. Not a clean comparison: WSL2 was
+running and holds part of the 32 GB, and the output went to the QLC disk (no RAM disk), after
+about 45 GB had been written to it.
+
+| | 2 GB (45.7M frames) | 16 GB (365.5M frames) | Linux, 2 GB |
+|---|---|---|---|
+| First load, log already in RAM | 1.33–1.35 s | - | 0.92 s |
+| First load, log partly in RAM | - | 13.9 s (replay), 22.9 s (frame cache bench, 716 MB/s) | - |
+| Open again (cache mapped) | 1–7 ms | 4.6–7 ms | 0.03 ms |
+| Play "as fast as possible" into the trace | 2.4–3.3 s = **14–19M frames/s** | 16.8–18.7 s = 19.5–21.8M frames/s | 41–45M frames/s |
+| Jump: seek a time + 50 rows with Δt | 34 µs | 70 µs | 13 µs |
+| Decode one id over the whole file | 1.38M frames in 333 ms | 11.1M frames in 2.45 s | 34 ms |
+| Cache size | 1.57 GB | 12.5 GB | 1.57 GB |
+
+Peak RSS is not reported on Windows (-1). With the cache evicted from RAM (after the 16 GB run)
+the same 2 GB decode took 76 s and a jump 42 ms: random reads of the mapping from the disk.
+
+Conversion of the 2 GB log to disk, best run per format: candump 3.8 s, MF4 3.0 s, pcap 1.4 s,
+pcapng 2.2 s, BLF 4.3 s, TRC 12 s, ASC 67 s. Repeated runs of one format differed by up to 30x
+(candump 3.8–111 s, pcapng 2.2–14 s, TRC 12–32 s): this measures the disk, not the code. Measure
+again with the output on a RAM disk before drawing conclusions.
 
 ## What to watch on Windows
 

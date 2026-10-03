@@ -11,8 +11,13 @@ target_link_libraries(kraken_drivers PRIVATE kraken_serial)
 
 target_sources(kraken_drivers PRIVATE canblast.cpp)
 
-target_sources(kraken_drivers PRIVATE socketcan.cpp)
-target_link_libraries(kraken_drivers PRIVATE PkgConfig::LIBNL)
+target_sources(kraken_drivers PRIVATE socketcan_link.cpp) # `ip` command lines: portable
+if(NOT WIN32)
+    target_sources(kraken_drivers PRIVATE socketcan.cpp)
+    target_link_libraries(kraken_drivers PRIVATE PkgConfig::LIBNL)
+else()
+    target_link_libraries(kraken_drivers PRIVATE ws2_32) # canblast.cpp
+endif()
 
 # Vendor interface of the 1d50:606f composite adapter: lin_usb (LindeAPI)
 target_sources(kraken_drivers PRIVATE linde/linde.cpp usb_vendor/usb_vendor_libusb.cpp)

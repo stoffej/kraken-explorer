@@ -39,7 +39,9 @@ namespace
 {
 
 constexpr const DriverOps* drivers[] = {
+#ifndef _WIN32
     &socketcan_driver,
+#endif
     &slcan_driver,
     &grip_driver,
     &canblast_driver,

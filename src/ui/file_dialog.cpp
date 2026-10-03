@@ -1,5 +1,6 @@
 #include "ui/file_dialog.h"
 
+#include "core/platform.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -67,9 +68,9 @@ bool less_ci(const std::string& a, const std::string& b)
 
 fs::path home_dir()
 {
-    if (const char* v = std::getenv("HOME"); v != nullptr && *v != '\0')
+    if (fs::path home = platform_home_dir(); !home.empty())
     {
-        return v;
+        return home;
     }
     std::error_code ec;
     return fs::current_path(ec);
@@ -249,7 +250,10 @@ void draw_places(FileDialog& d, std::optional<fs::path>& go)
     {
         place("Documents", home / "Documents", d, go);
     }
-    place("File System", "/", d, go);
+    for (const fs::path& root : platform_roots())
+    {
+        place(root == "/" ? "File System" : root.string().c_str(), root, d, go);
+    }
     ImGui::PopID();
     if (!g_recent_dirs.empty())
     {

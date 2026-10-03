@@ -5,6 +5,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "test_env.h"
+
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -26,11 +28,13 @@
 #include "ui/workspace_tabs.h"
 #include "ui_test.h"
 
+#ifdef __linux__
 #include <linux/can.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#endif
 #include <unistd.h>
 
 extern const DriverOps socketcan_driver;
@@ -80,7 +84,7 @@ std::filesystem::path temp_trace(std::string_view stem)
 // unless app.ifaces has the channel.
 void load_candump(App& app, Replay& r, const std::string& text, std::string_view stem)
 {
-    setenv("XDG_CACHE_HOME", std::filesystem::temp_directory_path().c_str(), 1);
+    test_setenv("XDG_CACHE_HOME", std::filesystem::temp_directory_path());
     const auto path = temp_trace(stem);
     std::ofstream(path, std::ios::binary) << text;
     replay_load(app, r, path.string());
@@ -285,6 +289,7 @@ TEST_CASE("filter rows and plan")
     CHECK(plan[3].target == replay_trace_only); // error frames are never sent
 }
 
+#ifdef __linux__ // SocketCAN
 TEST_CASE("replay a candump file onto vcan0 with its timing")
 {
     if (if_nametoindex("vcan0") == 0)
@@ -355,6 +360,7 @@ TEST_CASE("replay a candump file onto vcan0 with its timing")
     replay_stop(r);
     ifaces_stop(ifaces);
 }
+#endif
 
 TEST_CASE("stop interrupts a long wait at once")
 {
@@ -422,7 +428,7 @@ bool same_frame(const BusMessage& a, const BusMessage& b)
 
 TEST_CASE("replay_load parses a big file on the loader thread")
 {
-    setenv("XDG_CACHE_HOME", std::filesystem::temp_directory_path().c_str(), 1); // frame caches go there, not to ~/.cache
+    test_setenv("XDG_CACHE_HOME", std::filesystem::temp_directory_path()); // frame caches go there, not to ~/.cache
     const auto path = temp_trace("replay_big");
     const std::string text = write_big_candump(path);
     const ReplayFile sync = replay_parse(text, TraceFileFormat::CanDump);
@@ -466,7 +472,7 @@ TEST_CASE("replay_load parses a big file on the loader thread")
 
 TEST_CASE("replay_load: cancel, restart and destroy mid-load leave no threads")
 {
-    setenv("XDG_CACHE_HOME", std::filesystem::temp_directory_path().c_str(), 1);
+    test_setenv("XDG_CACHE_HOME", std::filesystem::temp_directory_path());
     const auto path = temp_trace("replay_cancel");
     write_big_candump(path);
     App app;
