@@ -123,7 +123,7 @@ jobs:
 
     - name: Build DEB package
       env:
-        DEB_MAINTAINER: Schildkroet <https://github.com/Schildkroet>
+        DEB_MAINTAINER: Kristoffer Johansson <https://github.com/stoffej>
       run: |
         # The Kvaser driver loads libcanlib at run time: nothing to install or bundle here.
         scripts/build_deb.sh build
