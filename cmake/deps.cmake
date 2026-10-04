@@ -5,8 +5,9 @@ set(FETCHCONTENT_QUIET ON)
 # -DKRAKEN_DEPS_DIR=<dir>: <dir>/<name>.tar.gz is used instead of the download when it exists
 # (offline builds; the CMake bundled with WinLibs has no CA certificates for https).
 function(kraken_fetch name url)
-    if(KRAKEN_DEPS_DIR AND EXISTS ${KRAKEN_DEPS_DIR}/${name}.tar.gz)
-        set(url ${KRAKEN_DEPS_DIR}/${name}.tar.gz)
+    file(TO_CMAKE_PATH "${KRAKEN_DEPS_DIR}" deps_dir) # C:\deps as typed on Windows: FetchContent chokes on the backslashes
+    if(KRAKEN_DEPS_DIR AND EXISTS ${deps_dir}/${name}.tar.gz)
+        set(url ${deps_dir}/${name}.tar.gz)
     endif()
     FetchContent_Declare(${name} URL ${url} DOWNLOAD_EXTRACT_TIMESTAMP ON ${ARGN})
 endfunction()

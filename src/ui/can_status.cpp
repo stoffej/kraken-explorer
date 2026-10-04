@@ -312,6 +312,7 @@ void autobaud_command(App& app, const std::string& name)
                            if (SetupInterface* si = bitrate ? setup_socketcan(app.setup, name) : nullptr)
                            {
                                si->bitrate = *bitrate; // Start and Up use it from now on
+                               si->listen_only = false; // the scan left the link up active
                            }
                            link_done(app);
                        });
@@ -323,6 +324,49 @@ void autobaud_command(App& app, const std::string& name)
     }
 }
 
+// The same for a driver that opens its own channel (PCAN, Kvaser, ...): iface_autobaud, listen-only.
+void autobaud_command(App& app, Iface& iface)
+{
+    CanStatusState& s = app.can_status;
+    const std::string driver = iface.ops != nullptr ? iface.ops->name : "";
+    const auto find = [driver, name = iface.info.name](Setup& setup) -> SetupInterface*
+    {
+        for (auto& net : setup.networks)
+        {
+            for (auto& si : net.interfaces)
+            {
+                if (si.driver == driver && si.name == name)
+                {
+                    return &si;
+                }
+            }
+        }
+        return nullptr;
+    };
+    const SetupInterface* si = find(app.setup);
+    const bool started = link_start(s,
+        [&tasks = app.tasks, &iface, find, config = si != nullptr ? *si : IfaceConfig{}] // ifaces is a deque: the reference stays
+        {
+            const std::optional<unsigned> bitrate = iface_autobaud(iface, config);
+            tasks_post(tasks,
+                       [bitrate, find](App& app)
+                       {
+                           app.can_status.autobaud_result = bitrate ? std::format("{:g} kbit/s", *bitrate / 1000.0) : "no match";
+                           if (SetupInterface* found = bitrate ? find(app.setup) : nullptr)
+                           {
+                               found->bitrate = *bitrate; // Start uses it from now on,
+                               found->listen_only = false; // active: readable traffic at that rate
+                           }
+                           link_done(app);
+                       });
+        });
+    if (started)
+    {
+        s.autobaud_iface = iface.info.name;
+        s.autobaud_result = "Auto-baud...";
+    }
+}
+
 // The Up/Down button (and Enter/Space on the selected row): physical CAN needs bit timing to
 // come up; vcan has none.
 void toggle_link(App& app, const Iface& iface)
@@ -330,6 +374,76 @@ void toggle_link(App& app, const Iface& iface)
     const IfaceConfig timing = setup_timing(app.setup, iface.info.name);
     link_command(app, iface.info.up ? LinkOp::Down : LinkOp::Up, iface.info.name,
                  iface.info.details == "vcan" ? nullptr : &timing);
+}
+
+// The interface's entry in the setup (driver + name), nullptr when it is in no network.
+SetupInterface* setup_of(Setup& setup, const Iface& iface)
+{
+    const std::string_view driver = iface.ops != nullptr ? iface.ops->name : "";
+    for (auto& net : setup.networks)
+    {
+        for (auto& si : net.interfaces)
+        {
+            if (si.driver == driver && si.name == iface.info.name)
+            {
+                return &si;
+            }
+        }
+    }
+    return nullptr;
+}
+
+// The Active / Passive button: flips the setup's listen-only for the interface. The next
+// measurement opens it that way; a SocketCAN link that is up is taken down and up again in the
+// new mode right away (the kernel only changes the mode on a link that is down).
+void toggle_listen_only(App& app, const Iface& iface)
+{
+    SetupInterface* si = setup_of(app.setup, iface);
+    if (si == nullptr)
+    {
+        return;
+    }
+    si->listen_only = !si->listen_only;
+    if (is_socketcan(iface) && iface.info.up)
+    {
+        link_start(app.can_status,
+            [&tasks = app.tasks, name = iface.info.name, timing = *si]
+            {
+                IpResult r = socketcan_run_ip({"link", "set", name, "down"});
+                if (r == IpResult::ok)
+                {
+                    r = socketcan_run_ip(ip_link_args(LinkOp::Up, name, &timing));
+                }
+                tasks_post(tasks,
+                           [r, name](App& app)
+                           {
+                               app.can_status.link_error = ip_error_text(r, name);
+                               link_done(app);
+                           });
+            });
+    }
+}
+
+// Drawn inside the disabled-while-busy block of draw_link_buttons, for a CAN interface of the
+// setup whose driver has a listen-only mode.
+void draw_mode_button(App& app, const Iface& iface)
+{
+    if (iface.info.bus_type != BusType::CAN || (iface.info.capabilities & iface_cap::listen_only) == 0 || iface.info.details == "vcan")
+    {
+        return;
+    }
+    const SetupInterface* si = setup_of(app.setup, iface);
+    if (si == nullptr)
+    {
+        return;
+    }
+    if (ImGui::SmallButton(si->listen_only ? "Passive" : "Active"))
+    {
+        toggle_listen_only(app, iface);
+    }
+    ImGui::SetItemTooltip("%s", si->listen_only ? "Passive (listen-only): receives, never acknowledges or sends. Click for active."
+                                                : "Active: acknowledges frames and can send. Click for passive (listen-only).");
+    ImGui::SameLine();
 }
 
 // Whether toggle_link may run: a SocketCAN link that exists, no command running, not measuring.
@@ -391,6 +505,26 @@ void draw_link_buttons(App& app, const Iface& iface)
 {
     if (!is_socketcan(iface))
     {
+        // No link to bring up or down; auto-baud only where the driver can listen without acking.
+        if (iface.info.bus_type == BusType::CAN && (iface.info.capabilities & iface_cap::listen_only) != 0)
+        {
+            ImGui::PushID(iface.index);
+            ImGui::BeginDisabled(app.can_status.link_busy || app.measuring);
+            draw_mode_button(app, iface);
+            if (ImGui::SmallButton("Auto-baud"))
+            {
+                autobaud_command(app, app.ifaces[iface.index]);
+            }
+            ImGui::SetItemTooltip("Finds the bitrate listen-only: nothing is sent or acknowledged on the bus.\n"
+                                  "A match is stored in the setup and the interface set to active mode.");
+            ImGui::EndDisabled();
+            if (app.can_status.autobaud_iface == iface.info.name)
+            {
+                ImGui::SameLine();
+                draw_status_text(app.can_status.autobaud_result);
+            }
+            ImGui::PopID();
+        }
         return;
     }
     const CanStatusState& s = app.can_status;
@@ -417,6 +551,7 @@ void draw_link_buttons(App& app, const Iface& iface)
     else
     {
         ImGui::SameLine();
+        draw_mode_button(app, iface);
         if (ImGui::SmallButton("Auto-baud"))
         {
             autobaud_command(app, iface.info.name);

@@ -253,7 +253,8 @@ struct BaudProbe
 [[nodiscard]] bool autobaud_hit(const BaudProbe& p) noexcept;
 
 // Probes the classic bitrates from 1M down, each listen-only for a short window. Hit: the
-// link is left up at that rate with the rest of timing; none: left down, timing restored.
+// link is left up at that rate, active (not listen-only), with the rest of timing; none: left
+// down, timing restored.
 // An `ip` failure that is not a rejected bitrate stops the scan: ip != ok, bitrate empty.
 // Blocking (several `ip` calls): run it on a worker thread.
 struct AutobaudResult
@@ -262,6 +263,15 @@ struct AutobaudResult
     IpResult ip = IpResult::ok;
 };
 AutobaudResult socketcan_autobaud(const std::string& name, IfaceConfig timing);
+
+// Auto-baud for a driver that opens its own channel (PCAN, Kvaser, ...): its classic bitrates from
+// the highest down, each opened listen-only for a short window and closed again. Listen-only on
+// every platform: the controller never ACKs and never sends an error flag, so a wrong rate cannot
+// disturb the bus. A channel without iface_cap::listen_only is therefore not probed at all.
+// Returns the first rate that hits (autobaud_hit), for the caller to store in the setup with
+// listen-only off: the measurement then opens the channel active at that rate. nullopt: none, no
+// listen-only mode, or the interface is open (a measurement runs). Blocking, holds the interface: run it on a worker thread.
+[[nodiscard]] std::optional<unsigned> iface_autobaud(Iface& iface, IfaceConfig config);
 
 // IFF_UP from /sys/class/net/<name>/flags; false when the link does not exist. Cheap (one read).
 [[nodiscard]] bool socketcan_link_up(const std::string& name);

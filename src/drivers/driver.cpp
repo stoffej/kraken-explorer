@@ -20,9 +20,11 @@
 
 #include "drivers/driver.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <format>
+#include <functional>
 #include <thread>
 #include <mutex>
 
@@ -296,6 +298,69 @@ void ifaces_stop(std::deque<Iface>& ifaces)
         log_info(std::format("Closing interface: {}", i.info.name));
         iface_close(i);
     }
+}
+
+std::optional<unsigned> iface_autobaud(Iface& iface, IfaceConfig config)
+{
+    // ponytail: fixed listen window per rate, as socketcan_autobaud: a bus slower than ~2 frames
+    // per 500 ms reads as idle.
+    constexpr auto window = std::chrono::milliseconds(500);
+    if (iface.ops == nullptr || iface.info.bus_type != BusType::CAN || (iface.info.capabilities & iface_cap::listen_only) == 0)
+    {
+        log_warning(std::format("auto-baud {}: no listen-only mode, not probed", iface.info.name));
+        return std::nullopt;
+    }
+    std::unique_lock lock(iface.io_mutex);
+    if (iface.open)
+    {
+        return std::nullopt;
+    }
+    std::vector<unsigned> rates;
+    for (const CanTiming& t : iface.info.bitrates)
+    {
+        rates.push_back(t.bitrate);
+    }
+    std::ranges::sort(rates, std::greater{});
+    rates.erase(std::unique(rates.begin(), rates.end()), rates.end());
+    config.listen_only = true;
+    config.can_fd = false;
+    config.is_custom_bitrate = false;
+    log_info(std::format("auto-baud {}: scanning, listen-only", iface.info.name));
+    std::array<BusMessage, listener_batch> buf;
+    for (const unsigned rate : rates)
+    {
+        config.bitrate = rate;
+        if (!iface.ops->open(iface, config))
+        {
+            iface.impl.reset();
+            continue; // the driver refuses this rate: a miss
+        }
+        BaudProbe p;
+        const auto end = std::chrono::steady_clock::now() + window;
+        for (auto now = std::chrono::steady_clock::now(); now < end; now = std::chrono::steady_clock::now())
+        {
+            const auto left = std::chrono::ceil<std::chrono::milliseconds>(end - now);
+            const int n = iface.ops->read(iface, buf.data(), static_cast<int>(buf.size()), static_cast<int>(left.count()));
+            if (n < 0)
+            {
+                break;
+            }
+            for (int i = 0; i < n; ++i)
+            {
+                ++(buf[static_cast<std::size_t>(i)].errors != 0 ? p.errors : p.frames);
+            }
+        }
+        iface.ops->close(iface);
+        iface.impl.reset();
+        log_info(std::format("auto-baud {} at {} bit/s: {} frames, {} error frames", iface.info.name, rate, p.frames, p.errors));
+        if (autobaud_hit(p))
+        {
+            log_info(std::format("auto-baud {}: {} bit/s", iface.info.name, rate));
+            return rate;
+        }
+    }
+    log_info(std::format("auto-baud {}: no traffic or no matching bitrate", iface.info.name));
+    return std::nullopt;
 }
 
 bool iface_send(Iface& iface, const BusMessage& msg)

@@ -40,7 +40,7 @@ where the hooks are implemented on top of an FDCAN driver and a LIN scheduler.
   also tries to open them as CAN channels. Windows caches this descriptor set
   per VID/PID/`bcdDevice`, so bump `bcdDevice` in `usb_descriptors.c` whenever
   you change it.
-- **[Kraken Explorer](https://github.com/stoffecpac/kraken-explorer)** supports all three
+- **[Kraken Explorer](https://github.com/stoffej/kraken-explorer)** supports all three
   interfaces out of the box: CAN via SocketCAN or `CandleApiDriver`, LIN via
   `LindeApiDriver`, and I/O in the GPIO Control window. Its
   `docs/usb_interfaces.md` is the detailed protocol reference.

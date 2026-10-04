@@ -42,8 +42,9 @@ Compress-Archive $Stage $Zip
 Write-Host "built $Zip"
 
 $Iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
-if (-not $Iscc) { $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-if (Test-Path $Iscc) {
+# Not in PATH after an install: for all users, or (winget --scope user) for this one.
+if (-not $Iscc) { $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+if ($Iscc -and (Test-Path $Iscc)) {
     & $Iscc /Qp "/DVersion=$Version" "/DStage=$((Resolve-Path $Stage).Path)" "/DOut=$((Resolve-Path $Build).Path)" "$Src\packaging\windows\kraken-explorer.iss"
     if ($LASTEXITCODE) { throw "installer failed" }
     Write-Host "built $Build\$Name-$Version-win64-setup.exe"

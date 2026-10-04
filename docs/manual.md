@@ -2,7 +2,7 @@
 # <img src="../packaging/kraken-explorer.png" width="48" height="48"> Kraken Explorer: Day of the N2K Tentacle
 _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 
-**Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux 🐧**
+**Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux 🐧 and Windows**
 
 Version 0.0.2.
 
@@ -42,7 +42,7 @@ Version 0.0.2.
 *   **Large Logs**: A loaded log is parsed once into a frame cache (`$XDG_CACHE_HOME/kraken-explorer/*.kfc`, rebuilt when the file's content changes, the least recently opened caches are dropped once the directory exceeds 32 GB) and mapped, so multi-GB logs open instantly afterwards. The whole file shows in the trace: jump with the Log's position slider or "Go to" time, the graph decodes only the visible time window. See [Large logs and the frame cache](#large-logs-and-the-frame-cache).
 *   **Trace file view**: With a loaded file the Log shows the whole file, however big: a row-linear position slider ("row 182 764 569 at 1:02:03.500"), a **Go to** field taking a time since the first frame (`90`, `1:30`, `1:02:03.5`, `2d 1:02:03`; Enter jumps), the mouse wheel and the vim keys (`j`/`k`, `gg`/`G`, Ctrl+d/u/f/b). The filter runs over the file's per-id index, the Index column groups thousands (`182 764 569`).
 *   **Export Formats**: Save traces as Vector ASC or BLF, Vector MDF4, Linux candump, PEAK TRC, PCAP or PCAPng (Wireshark-compatible).
-*   **SocketCAN link control**: The CAN Status view brings interfaces Up / Down (physical CAN with the bitrate from the setup), creates and deletes `vcan` interfaces, and **Auto-baud** scans a physical interface listen-only (1 Mbit/s down to 10 kbit/s), brings it up at the bitrate it finds and stores that in the setup.
+*   **SocketCAN link control**: The CAN Status view brings interfaces Up / Down (physical CAN with the bitrate from the setup), creates and deletes `vcan` interfaces, and **Auto-baud** scans a physical interface listen-only (1 Mbit/s down to 10 kbit/s), brings it up active at the bitrate it finds and stores that in the setup. The same button on a PEAK (Windows) or Kvaser channel probes the adapter's bitrates through its driver. The scan is listen-only on Linux and Windows: nothing is sent or acknowledged, so a wrong bitrate cannot disturb the bus, and an adapter without a listen-only mode is not probed. Only when traffic is readable at a rate is that rate stored and the interface set to active mode. The **Active** / **Passive** button next to it switches an interface between normal operation and listen-only (the same option as "Bus Monitoring Mode" in the setup); it takes effect at the next measurement start, a SocketCAN link that is up is restarted in the new mode at once.
 *   **Workspace**: Dear ImGui interface with docking, floating windows on multiple monitors, workspace tabs, Light/Dark theme, adjustable text size (Settings, 100–175 %) and an in-app file picker. Uses no CPU while idle.
 
 <br>![Kraken Explorer Trace View](view.png)<br>
@@ -236,7 +236,7 @@ canconvert TCU.arxml TCU.dbc
 
 ## 📥 Download
 
-Download the latest release from the [Releases](https://github.com/stoffecpac/kraken-explorer/releases).
+Download the latest release from the [Releases](https://github.com/stoffej/kraken-explorer/releases).
 
 ## 📜 Credits
 

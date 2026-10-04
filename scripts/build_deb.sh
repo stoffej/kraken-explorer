@@ -60,7 +60,7 @@ Priority: optional
 Architecture: $ARCH
 Depends: $SHLIBS, libgl1, pkexec | policykit-1, iproute2
 Maintainer: $MAINT
-Homepage: https://github.com/stoffecpac/kraken-explorer
+Homepage: https://github.com/stoffej/kraken-explorer
 Description: Kraken Explorer: Day of the N2K Tentacle
  "Deeper than a Peak. Wireshark is stuck in shallow waters."
  Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer with SocketCAN,

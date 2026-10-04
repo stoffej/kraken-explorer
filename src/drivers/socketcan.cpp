@@ -636,6 +636,7 @@ AutobaudResult socketcan_autobaud(const std::string& name, IfaceConfig timing)
         {
             log_info(std::format("auto-baud {}: {} bit/s", name, *it));
             timing.bitrate = *it;
+            timing.listen_only = false; // readable traffic: the link comes up active at that rate
             socketcan_set_timing(name, timing);
             return {.bitrate = *it};
         }

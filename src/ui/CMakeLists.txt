@@ -26,7 +26,7 @@ target_include_directories(kraken_ui PRIVATE ${font_out})
 # Icons (ui/icons.cpp): SVGs embedded as raw strings, rasterised with nanosvg at start-up.
 # Order must match enum class Icon in ui/icons.h.
 set(icon_dir ${CMAKE_SOURCE_DIR}/src/assets)
-set(ICON_SVGS # Lucide (ISC), same order as enum class Icon in ui/icons.h
+set(ICON_SVGS # Lucide (ISC, src/assets/icons/LICENSE), same order as enum class Icon in ui/icons.h
     icons/folder-open.svg icons/save-all.svg icons/save.svg icons/eraser.svg
     icons/play.svg icons/square.svg icons/settings-2.svg icons/refresh-cw.svg
     icons/chart-line.svg icons/filter.svg icons/folder.svg icons/file.svg

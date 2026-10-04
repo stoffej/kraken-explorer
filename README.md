@@ -2,7 +2,7 @@
 
 _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 
-Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux, with a Dear ImGui GUI in a
+Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux and Windows, with a Dear ImGui GUI in a
 deep-sea dark theme, licensed under GPL-2.0.
 Fork of [CANgaroo](https://github.com/Schildkroet/CANgaroo).
 
@@ -17,7 +17,7 @@ Ctrl+P signal finder, the vim copy menu and the keyboard overlay, on a simulated
 Clone and install in one shot — installs build dependencies, builds a `.deb` and installs it:
 
 ```bash
-git clone https://github.com/stoffecpac/kraken-explorer && cd kraken-explorer && scripts/install.sh
+git clone https://github.com/stoffej/kraken-explorer && cd kraken-explorer && scripts/install.sh
 ```
 
 ## Build
