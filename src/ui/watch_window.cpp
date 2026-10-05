@@ -189,7 +189,8 @@ void draw_watch_window(App& app, const WorkspaceTab& tab, WatchWindow& w)
     {
         return;
     }
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 320.0f), ImGuiCond_FirstUseEver);
+    const float px = ImGui::GetFontSize() / 15.0f;
+    ImGui::SetNextWindowSize(ImVec2(560.0f * px, 320.0f * px), ImGuiCond_FirstUseEver);
     if (ImGui::Begin(workspace_window_name(tab, "Watch").c_str(), &w.open))
     {
         draw_add_combo(app, w);
@@ -207,7 +208,6 @@ void draw_watch_window(App& app, const WorkspaceTab& tab, WatchWindow& w)
                                           | ImGuiTableFlags_Resizable;
         if (!w.items.empty() && ImGui::BeginTable("##watch", 6, flags))
         {
-            const float px = ImGui::GetFontSize() / 15.0f;
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 130.0f * px);

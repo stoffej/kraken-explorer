@@ -128,6 +128,7 @@ struct Replay
 {
     bool open = false;
     FileDialog load_dialog;
+    FileDialog db_dialog; // asked right after a trace is chosen: the CAN databases to decode it with
     ReplayLoaded data;        // the loaded file (data.info: name, count, duration or the load error)
     std::vector<int> mapping; // per file channel
     float speed = 1.0f; // 1 = the file's own timing
@@ -189,6 +190,10 @@ void replay_load(App& app, Replay& r, const std::string& path);
 // interface of the same name and returns true (starts autoplay if measuring). Errors end up
 // in r.data.info. draw_replay calls it every frame.
 bool replay_load_poll(App& app, Replay& r);
+
+// Adds CAN databases to the network the replay sends into (the first network when it only
+// goes to the trace), rebuilding the setup cache; failures go to the status bar.
+void replay_add_databases(App& app, const Replay& r, const std::vector<std::string>& paths);
 
 // Cancels a running load (joins the loader) and discards its result.
 void replay_load_cancel(Replay& r);

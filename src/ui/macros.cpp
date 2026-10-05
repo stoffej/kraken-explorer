@@ -310,7 +310,8 @@ void macros_frame(App& app, Macros& macros)
     {
         return;
     }
-    ImGui::SetNextWindowSize(ImVec2(760.0f, 420.0f), ImGuiCond_FirstUseEver);
+    const float px = ImGui::GetFontSize() / 15.0f;
+    ImGui::SetNextWindowSize(ImVec2(760.0f * px, 420.0f * px), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Macros", &macros.open))
     {
         const float em = ImGui::GetFontSize();

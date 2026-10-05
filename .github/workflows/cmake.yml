@@ -4,12 +4,12 @@ on:
   workflow_dispatch:  # enables manual trigger
     inputs:
       draft_release:
-        description: Create (or refresh) the draft release v<version> from this run's packages
+        description: Create (or refresh) the draft release <version> from this run's packages
         type: boolean
         default: false
   push:
     branches: [ "main", "master" ]
-    tags: [ "v*" ]      # a version tag builds the packages and attaches them to a draft release
+    tags: [ "[0-9]*" ]  # a tag like 0.0.3 builds the packages and attaches them to the release
   pull_request:
     branches: [ "main", "master" ]
 
@@ -256,7 +256,7 @@ jobs:
 
   release:
     name: Draft release
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.draft_release
+    if: github.ref_type == 'tag' || inputs.draft_release
     needs: [unit-tests, format-compat, package, windows]
     runs-on: ubuntu-24.04
     permissions:
@@ -272,20 +272,21 @@ jobs:
         path: dist
         merge-multiple: true
 
-    # Always a draft: it is published by hand on the releases page, which also creates the tag
-    # when the run was started manually.
+    # A new release is a draft, published by hand on the releases page (which also creates the
+    # tag when the run was started manually). An existing release for the tag, draft or
+    # published, gets this run's packages.
     - name: Create draft release
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         VERSION=$(sed -nE 's/^project\(kraken_explorer VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
-        TAG="v$VERSION"
+        TAG="$VERSION"
         if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
           echo "::error::tag $GITHUB_REF_NAME does not match version $VERSION in CMakeLists.txt"
           exit 1
         fi
         ls -la dist
-        if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)" = true ]; then
+        if gh release view "$TAG" >/dev/null 2>&1; then
           gh release upload "$TAG" dist/* --clobber
         else
           gh release create "$TAG" dist/* --draft --generate-notes --target "$GITHUB_SHA" --title "Kraken Explorer $VERSION"

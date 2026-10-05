@@ -115,8 +115,7 @@ void choose_databases(SetupDialogState& s, int net_index)
     }
     else
     {
-        file_dialog_open(s.db_dialog, FileDialogMode::OpenMultiple, "Load CAN Databases", "",
-                         {{"CAN Databases (*.dbc *.dbf *.sym)", "*.dbc *.dbf *.sym"}, {"All Files", "*"}});
+        file_dialog_open(s.db_dialog, FileDialogMode::OpenMultiple, "Load CAN Databases", "", can_db_read_filters);
     }
 }
 
@@ -146,21 +145,9 @@ void add_databases(SetupDialogState& s, SetupNetwork& net, const std::vector<std
             net.lin_dbs.push_back(std::move(db));
             continue;
         }
-        CanDb fresh;
-        if (!can_db_parse_file(path, fresh))
+        if (!setup_add_can_db(net, path))
         {
             s.message = std::format("Failed to load DBC file {}", path);
-            continue;
-        }
-        fresh.path = path;
-        const auto dup = std::ranges::find_if(net.can_dbs, [&](const auto& d) { return d->path == path; });
-        if (dup != net.can_dbs.end())
-        {
-            can_db_update_from(**dup, fresh); // in place: held CanDbMessage*/CanDbSignal* survive
-        }
-        else
-        {
-            net.can_dbs.push_back(std::make_shared<CanDb>(std::move(fresh)));
         }
     }
     setup_rebuild_cache(s.work);

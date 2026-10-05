@@ -1724,6 +1724,36 @@ void replay_load(App& app, Replay& r, const std::string& path)
     r.loader = std::jthread(replay_load_run, std::move(done), std::ref(r), path, app.tasks.wake);
 }
 
+void replay_add_databases(App& app, const Replay& r, const std::vector<std::string>& paths)
+{
+    // The network of the first mapped interface; trace-only replays (the default, and while the
+    // file is still loading) decode from any network, so the first one does.
+    int net = -1;
+    for (const int target : r.mapping)
+    {
+        if (target >= 0 && (net = setup_network_of(app.setup, static_cast<uint16_t>(target))) >= 0)
+        {
+            break;
+        }
+    }
+    if (net < 0)
+    {
+        if (app.setup.networks.empty())
+        {
+            app.setup.networks.push_back({.name = "Network 1"});
+        }
+        net = 0;
+    }
+    for (const auto& path : paths)
+    {
+        if (!setup_add_can_db(app.setup.networks[static_cast<std::size_t>(net)], path))
+        {
+            status_bar_notice(app.status_bar, std::format("Failed to load database {}", path));
+        }
+    }
+    setup_rebuild_cache(app.setup);
+}
+
 bool replay_load_poll(App& app, Replay& r)
 {
     if (!r.loading.valid() || r.loading.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
@@ -1910,7 +1940,8 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
     {
         return;
     }
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_FirstUseEver);
+    const float px = ImGui::GetFontSize() / 15.0f; // the size is in 1x pixels: scale with the font (HiDPI)
+    ImGui::SetNextWindowSize(ImVec2(640.0f * px, 480.0f * px), ImGuiCond_FirstUseEver);
     if (ImGui::Begin(workspace_window_name(tab, "Replay").c_str(), &r.open))
     {
         const bool running = r.running;
@@ -1922,6 +1953,12 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
         for (const auto& path : file_dialog_draw(r.load_dialog))
         {
             replay_load(app, r, path);
+            file_dialog_open(r.db_dialog, FileDialogMode::OpenMultiple, "Load CAN Databases for the Replay (Cancel: none)", "",
+                             can_db_read_filters);
+        }
+        if (const std::vector<std::string> dbs = file_dialog_draw(r.db_dialog); !dbs.empty())
+        {
+            replay_add_databases(app, r, dbs);
         }
         same_line_or_wrap(icon_text_button_width("Play"));
         ImGui::BeginDisabled(replay_frames(r.data).empty());

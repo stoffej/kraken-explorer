@@ -97,6 +97,10 @@ void setup_interface_save_xml(const SetupInterface& intf, pugi::xml_node& el);
 bool setup_reload_databases(Setup& setup, std::vector<std::string>* errors = nullptr);
 
 void setup_rebuild_cache(Setup& setup);
+// Loads a CAN database (DBC/DBF/SYM by extension) into `net`; a file already there is
+// updated in place (held CanDbMessage*/CanDbSignal* survive). No cache rebuild. False on a
+// parse failure, with `net` untouched.
+bool setup_add_can_db(SetupNetwork& net, const std::string& path);
 // Index of the network whose interfaces include runtime interface `iface`, -1 if none.
 // Scans the interfaces on every call, so it is right even before setup_rebuild_cache()
 // runs after interface resolution.

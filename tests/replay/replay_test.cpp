@@ -843,9 +843,23 @@ TEST_CASE("MF4: python-can's bus logging file, asammdf's DZ variant, and our own
         REQUIRE(f.frames.size() == 6);
         // One channel group per frame kind: sort by time as the frame cache does.
         std::ranges::stable_sort(f.frames, {}, &BusMessage::ts_ns);
+        // python-can stamps the header with the writer's local wall-clock time and no UTC offset
+        // (hd_time_flags = 1), so the reader resolves it in its own zone. The file was written in
+        // CEST (UTC+2), where the first frame reads as 1'700'000'000 s; elsewhere it is off by the
+        // difference to that zone (no time zone database: the parser keeps the header as UTC).
+        int64_t first_ns = 1'700'000'000'000'000'000 + int64_t{7200} * 1'000'000'000;
+        try
+        {
+            using namespace std::chrono;
+            const local_seconds written{1'790'961'382s}; // the header's start time, as in the file
+            first_ns -= duration_cast<nanoseconds>(current_zone()->get_info(written).first.offset).count();
+        }
+        catch (const std::exception&)
+        {
+        }
         for (std::size_t i = 0; i < f.frames.size(); ++i)
         {
-            CHECK(std::abs(f.frames[i].ts_ns - (1'700'000'000'000'000'000 + static_cast<int64_t>(i) * 10'000'000)) < 1000);
+            CHECK(std::abs(f.frames[i].ts_ns - (first_ns + static_cast<int64_t>(i) * 10'000'000)) < 1000);
         }
         CHECK(f.frames[0].id == 0x123);
         CHECK(f.frames[0].len == 3);

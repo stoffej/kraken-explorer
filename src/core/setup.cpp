@@ -1,6 +1,7 @@
 #include "core/setup.h"
 
 #include <algorithm>
+#include <memory>
 #include <format>
 
 #include "core/log.h"
@@ -255,6 +256,26 @@ bool setup_reload_databases(Setup& setup, std::vector<std::string>* errors)
     }
     setup_rebuild_cache(setup);
     return ok;
+}
+
+bool setup_add_can_db(SetupNetwork& net, const std::string& path)
+{
+    CanDb fresh;
+    if (!can_db_parse_file(path, fresh))
+    {
+        return false;
+    }
+    fresh.path = path;
+    const auto dup = std::ranges::find_if(net.can_dbs, [&](const auto& d) { return d->path == path; });
+    if (dup != net.can_dbs.end())
+    {
+        can_db_update_from(**dup, fresh);
+    }
+    else
+    {
+        net.can_dbs.push_back(std::make_shared<CanDb>(std::move(fresh)));
+    }
+    return true;
 }
 
 void setup_rebuild_cache(Setup& setup)

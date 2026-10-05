@@ -40,6 +40,10 @@ inline const std::vector<FileFilter> trace_read_filters = {
     {"Linux candump", "*.candump *.log"},   {"PCAP", "*.pcap"},          {"PCAPng", "*.pcapng"},
     {"PEAK PCAN trace", "*.trc"},           {"All Files", "*"}};
 
+// CAN databases the setup loads (Setup dialog, Replay's prompt after a trace).
+inline const std::vector<FileFilter> can_db_read_filters = {{"CAN Databases (*.dbc *.dbf *.sym)", "*.dbc *.dbf *.sym"},
+                                                            {"All Files", "*"}};
+
 struct FileEntry
 {
     std::string name;
