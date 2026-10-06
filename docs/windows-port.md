@@ -41,8 +41,8 @@ gives `kraken-explorer-<version>-win64.zip` (14 MB): the stripped Release exe, t
 of the version it was linked against, `examples\`, `install.bat` and `uninstall.bat`. The user
 unzips it and either runs `kraken-explorer.exe` in place or double-clicks `install.bat`, which
 copies the folder to `%LOCALAPPDATA%\Programs\Kraken Explorer` and adds a Start menu shortcut (per
-user, no administrator rights; run it again to upgrade). The exe is not signed: SmartScreen warns
-on first run.
+user, no administrator rights; run it again to upgrade). A local build is not signed: SmartScreen
+warns on first run. Release builds from CI are, see "Code signing".
 
 With Inno Setup 6.3+ installed (`winget install JRSoftware.InnoSetup`) the script also builds
 `kraken-explorer-<version>-win64-setup.exe` from `packaging/windows/kraken-explorer.iss`: the same
@@ -50,6 +50,28 @@ files as one installer, per user, with a Start menu entry and an uninstall entry
 list. CI builds both; pushing a tag like `0.0.3` (the version in `CMakeLists.txt`) attaches the
 zip, the setup.exe, the .deb and the AppImage to a draft release, which is published by hand on
 the releases page.
+
+## Code signing
+
+Release packages are signed through [SignPath Foundation](https://signpath.org/foundation), which
+provides free code signing certificates to open source projects. In the Windows CI job
+`scripts\build_win_zip.ps1 -StageOnly` builds and stages, the SignPath action signs
+`kraken-explorer.exe` in the cloud and writes it back into the staged folder, `-PackageOnly` zips
+and builds the installer, and a second pass signs the setup.exe. The python3xx.dll ships with the
+Python Software Foundation's own signature. Pull requests and forks have no token and build
+unsigned packages.
+
+One-time setup, after the Foundation application is approved:
+
+1. In SignPath: project `kraken-explorer` connected to this GitHub repository, with the signing
+   policies `release-signing` (Foundation certificate) and `test-signing` (self-signed test
+   certificate, used by main-branch builds), the default artifact configuration (a single PE file).
+2. In the GitHub repository settings: secret `SIGNPATH_API_TOKEN` (a CI user's API token from
+   SignPath) and variable `SIGNPATH_ORGANIZATION_ID`.
+
+SmartScreen reputation is tied to the certificate and builds up with downloads over the first
+releases; a signed file can still warn until then. The uninstaller that Inno Setup generates is
+not signed (Inno's `SignTool` directive needs a local signing tool, which the cloud flow has not).
 
 ## To do
 

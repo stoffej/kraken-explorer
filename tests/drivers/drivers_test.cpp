@@ -461,7 +461,7 @@ TEST_CASE("SocketCAN link commands (GUI up/down, vcan add/delete)")
           == V{"link", "set", "can1", "up", "type", "can", "bitrate", "250000", "sample-point", "0.800",
                "dbitrate", "2000000", "dsample-point", "0.750", "fd", "on", "listen-only", "off", "restart-ms", "100"});
     CHECK(ip_link_args(LinkOp::Down, "can0") == V{"link", "set", "can0", "down"});
-    CHECK(ip_link_args(LinkOp::AddVcan, "vcan2") == V{"link", "add", "dev", "vcan2", "type", "vcan"});
+    CHECK(ip_link_args(LinkOp::AddVcan, "vcan2") == V{"link", "add", "dev", "vcan2", "up", "type", "vcan"});
     CHECK(ip_link_args(LinkOp::Delete, "vcan2") == V{"link", "delete", "vcan2"});
 
     const V as_user = ip_command({"link", "delete", "vcan2"}, false);

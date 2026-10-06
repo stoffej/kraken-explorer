@@ -4,7 +4,7 @@ _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 
 **Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux 🐧 and Windows**
 
-Version 0.0.3.
+Version 0.0.4.
 
 **vs PCAN-Explorer:** the everyday PCAN-Explorer workflow (`.sym` symbol files, instrument panels, signal-based and triggered transmit, XY plots, cycle-time statistics), free, on Linux, with the adapters below.
 

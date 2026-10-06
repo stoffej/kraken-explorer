@@ -366,7 +366,8 @@ void draw_control_bar(App& app)
     // Last frame's cursor extent: ContentSize is only refreshed inside Begin(), one frame later.
     const float used = prev != nullptr ? prev->DC.CursorMaxPos.y - prev->DC.CursorStartPos.y : 0.0f;
     const float content = used > 0.0f ? used : ImGui::GetFrameHeight();
-    const float height = content + pad.y * 2.0f;
+    const float sea = 8.0f * px; // the water strip under the buttons
+    const float height = content + pad.y * 2.0f + sea;
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings
                                        | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoScrollWithMouse;
     if (ImGui::BeginViewportSideBar(name, ImGui::GetMainViewport(), ImGuiDir_Up, height, flags))
@@ -411,16 +412,38 @@ void draw_control_bar(App& app)
         command_button(app, Command::Convert, Icon::Convert, "Convert");
         draw_record_status(app);
 
-        // Sea level: a faint teal swell along the bottom edge.
+        // Sea level: the bar floats on water. Translucent water from the crest down to the
+        // bottom edge, a long faint swell behind and a sharper crest in front, each the sum of
+        // two sines so the waves are irregular.
         const ImVec2 wp = ImGui::GetWindowPos();
-        const float y = wp.y + ImGui::GetWindowHeight() - 2.5f * px;
+        const float x1 = wp.x + ImGui::GetWindowWidth();
+        const float bottom = wp.y + ImGui::GetWindowHeight();
+        const float level = bottom - sea;
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float step = 6.0f * px;
-        for (float x = wp.x; x < wp.x + ImGui::GetWindowWidth(); x += step)
+        const float step = 3.0f * px;
+        const auto swell = [&](float x)
+        { return level + (std::sin(x / (26.0f * px)) * 1.6f + std::sin(x / (9.0f * px) + 1.0f) * 1.0f) * px; };
+        const auto crest = [&](float x)
+        { return level + (std::sin(x / (11.0f * px) + 2.0f) * 2.2f + std::sin(x / (31.0f * px)) * 1.2f) * px; };
+        const ImDrawListFlags aa = dl->Flags;
+        dl->Flags &= ~ImDrawListFlags_AntiAliasedFill; // adjacent quads: AA would show seams
+        const ImU32 water = ImGui::GetColorU32(ImGuiCol_CheckMark, 0.22f);
+        for (float x = wp.x; x < x1; x += step)
         {
-            dl->PathLineTo(ImVec2(x, y + std::sin(x / (14.0f * px)) * 1.5f * px));
+            const float xn = std::min(x + step, x1);
+            dl->AddQuadFilled(ImVec2(x, crest(x)), ImVec2(xn, crest(xn)), ImVec2(xn, bottom), ImVec2(x, bottom), water);
         }
-        dl->PathStroke(ImGui::GetColorU32(ImGuiCol_CheckMark, 0.45f), ImDrawFlags_None, 1.5f * px);
+        dl->Flags = aa;
+        for (float x = wp.x; x <= x1; x += step)
+        {
+            dl->PathLineTo(ImVec2(x, swell(x)));
+        }
+        dl->PathStroke(ImGui::GetColorU32(ImGuiCol_CheckMark, 0.35f), ImDrawFlags_None, 1.0f * px);
+        for (float x = wp.x; x <= x1; x += step)
+        {
+            dl->PathLineTo(ImVec2(x, crest(x)));
+        }
+        dl->PathStroke(ImGui::GetColorU32(ImGuiCol_CheckMark, 0.85f), ImDrawFlags_None, 1.5f * px);
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

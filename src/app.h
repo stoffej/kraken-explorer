@@ -34,6 +34,7 @@
 #include "ui/status_bar.h"
 #include "ui/theme.h"
 #include "ui/tx_generator.h"
+#include "ui/ink.h"
 #include "ui/value_search.h"
 #include "ui/watch_window.h"
 #include "ui/vim_nav.h"
@@ -48,6 +49,7 @@ struct App
     bool quit = false;
     bool measuring = false; // measurement running; set by measurement start/stop (T16)
     MainMenu menu;          // menu/control-bar commands, recent files, record toggle
+    InkState ink;           // the "ink" easter egg (ui/ink.h)
     Settings settings;      // ini-backed settings + current workspace file
     WorkspaceTabs workspace; // bottom tabs, one dockspace each
     ThemeFonts fonts; // fonts.mono for hex/data columns

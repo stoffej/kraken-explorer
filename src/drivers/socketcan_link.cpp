@@ -82,7 +82,7 @@ std::vector<std::string> ip_link_args(LinkOp op, const std::string& name, const 
     case LinkOp::Down:
         return {"link", "set", name, "down"};
     case LinkOp::AddVcan:
-        return {"link", "add", "dev", name, "type", "vcan"};
+        return {"link", "add", "dev", name, "up", "type", "vcan"}; // up at once: a new vcan is otherwise created down
     case LinkOp::Delete:
         return {"link", "delete", name};
     }

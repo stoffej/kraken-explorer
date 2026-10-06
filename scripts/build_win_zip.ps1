@@ -5,7 +5,9 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\build_win_zip.ps1 [-Build <dir>]
 # CMAKE_ARGS: extra configure flags, e.g. -DKRAKEN_DEPS_DIR=C:\deps (WinLibs' cmake cannot https).
 # The user unzips anywhere and runs the exe, or double-clicks install.bat (per-user, no admin).
-param([string]$Build = "build\win-release")
+# -StageOnly stops after the staged folder is filled; -PackageOnly zips an existing staged folder
+# and builds the installer. CI runs the two halves with code signing of the exe in between.
+param([string]$Build = "build\win-release", [switch]$StageOnly, [switch]$PackageOnly)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue" # Invoke-WebRequest is 10x slower with the progress bar
 $Src = Split-Path $PSScriptRoot -Parent
@@ -13,12 +15,13 @@ $Name = "kraken-explorer"
 if ((Get-Content "$Src\CMakeLists.txt" -Raw) -notmatch 'project\(kraken_explorer VERSION ([0-9.]+)') { throw "no version in CMakeLists.txt" }
 $Version = $Matches[1]
 
+$Stage = "$Build\$Name-$Version-win64"
+if (-not $PackageOnly) {
 cmake -S $Src -B $Build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKRAKEN_TESTS=OFF @(-split $env:CMAKE_ARGS)
 if ($LASTEXITCODE) { throw "configure failed" }
 cmake --build $Build --target $Name
 if ($LASTEXITCODE) { throw "build failed" }
 
-$Stage = "$Build\$Name-$Version-win64"
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item $Stage -ItemType Directory | Out-Null
 Copy-Item "$Build\src\$Name.exe" $Stage
@@ -35,6 +38,8 @@ if (-not (Test-Path $PyZip)) { Invoke-WebRequest "https://www.python.org/ftp/pyt
 Expand-Archive $PyZip $Stage
 Rename-Item "$Stage\LICENSE.txt" "LICENSE-python.txt"
 Remove-Item "$Stage\python.exe", "$Stage\pythonw.exe", "$Stage\python.cat" -ErrorAction SilentlyContinue
+}
+if ($StageOnly) { Write-Host "staged $Stage"; exit 0 }
 
 $Zip = "$Stage.zip"
 if (Test-Path $Zip) { Remove-Item $Zip }

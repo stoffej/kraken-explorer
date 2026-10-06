@@ -351,6 +351,16 @@ bool conditions_met(const std::vector<LogCondition>& conds, bool and_logic, cons
     return and_logic;
 }
 
+TriggerState conditional_logging_state(const ConditionalLogging& cl) noexcept
+{
+    return !cl.config.enabled ? TriggerState::Off : cl.condition_met ? TriggerState::Triggered : TriggerState::Armed;
+}
+
+const char* trigger_state_label(TriggerState s) noexcept
+{
+    return s == TriggerState::Armed ? "Armed: waiting for trigger" : s == TriggerState::Triggered ? "Triggered: logging" : "";
+}
+
 void conditional_logging_evaluate(ConditionalLogging& cl)
 {
     const bool met = cl.config.enabled && conditions_met(cl.config.conditions, cl.config.and_logic, cl.values, cl.iface_values);
@@ -580,6 +590,12 @@ void draw_conditional_logging(App& app, ConditionalLogging& cl)
         cl.edit.log_file_path = path;
     }
     ImGui::Checkbox("Enable Conditional Logging (File Output)", &cl.edit.enabled);
+    if (const TriggerState trig = conditional_logging_state(cl); trig != TriggerState::Off)
+    {
+        ImGui::SameLine();
+        const unsigned c = theme_text(trig == TriggerState::Armed ? ThemeText::warn : ThemeText::rec);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(c), "%s", trigger_state_label(trig));
+    }
     if (!cl.error.empty())
     {
         ImGui::SameLine();

@@ -81,8 +81,8 @@ void wake_main_loop()
 // are masked) refresh only on the next wakeup; add a slow (1 s) tick while measuring if that matters.
 bool replay_animating(const App& app)
 {
-    return std::ranges::any_of(app.replays, [](const auto& kv)
-                               { return kv.second.open && (kv.second.loader.joinable() || kv.second.running); });
+    return ink_active(app.ink) || std::ranges::any_of(app.replays, [](const auto& kv)
+                                      { return kv.second.open && (kv.second.loader.joinable() || kv.second.running); });
 }
 
 constexpr double watch_tick = 1.0; // s: the file-change check of a loaded log, no frame drawn for it

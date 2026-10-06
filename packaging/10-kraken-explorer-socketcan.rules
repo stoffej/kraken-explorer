@@ -25,7 +25,7 @@ var KE_ALLOWED = [
         " listen-only (?:on|off) restart-ms " + KE_NUM,
     // auto-baud probe
     "link set " + KE_IF + " up type can bitrate " + KE_NUM + " listen-only on",
-    "link add dev " + KE_IF + " type vcan",
+    "link add dev " + KE_IF + " up type vcan",
     "link delete " + KE_IF
 ];
 

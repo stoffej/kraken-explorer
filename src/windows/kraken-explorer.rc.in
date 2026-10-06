@@ -1,0 +1,33 @@
+// Resources of kraken-explorer.exe and the tests. 1 24 = CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST.
+// MinGW's own default manifest is kept out of the link in src/CMakeLists.txt.
+// Configured by CMake (version numbers): the build reads this from <build>/src/kraken-explorer.rc.
+LANGUAGE 0, 0
+1 24 "@CMAKE_CURRENT_SOURCE_DIR@/windows/kraken-explorer.manifest"
+// The icon Explorer and the taskbar show (the lowest id is the exe's icon); the 256 px PNG of
+// packaging/kraken-explorer.png in an .ico container.
+1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/windows/kraken-explorer.ico"
+
+// Properties > Details of the exe. Code signing (SignPath) requires ProductName and ProductVersion.
+1 VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEOS 0x40004L
+FILETYPE 0x1L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Kraken Explorer"
+            VALUE "FileDescription", "Kraken Explorer: CAN / CAN FD / LIN / NMEA 2000 bus analyzer"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "LegalCopyright", "GPL-2.0"
+            VALUE "ProductName", "Kraken Explorer"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

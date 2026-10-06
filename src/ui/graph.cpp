@@ -1489,6 +1489,12 @@ void draw_graph(App& app, const WorkspaceTab& tab, GraphState& g)
     if (visible)
     {
         draw_toolbar(app, g);
+        if (const TriggerState trig = conditional_logging_state(app.conditional_logging); trig != TriggerState::Off)
+        {
+            const unsigned c = theme_text(trig == TriggerState::Armed ? ThemeText::warn : ThemeText::rec);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(c), "%s%s", trigger_state_label(trig),
+                               trig == TriggerState::Armed ? " (the graph starts when the condition is met)" : "");
+        }
         follow_window(app, g); // every view: the statistics use the window in Text / Gauge too
         sync_with_log(app, tab, g);
         if (ImGui::BeginChild("##side", ImVec2(280.0f * px, 0.0f), ImGuiChildFlags_ResizeX | ImGuiChildFlags_Borders))
@@ -2181,6 +2187,13 @@ void graph_ingest(GraphState& g, const App& app)
     }
     if (g.signals.empty())
     {
+        g.next_index = tr.end;
+        return;
+    }
+    if (conditional_logging_state(app.conditional_logging) == TriggerState::Armed)
+    {
+        // The graph starts with the trigger: frames that arrive while armed are skipped.
+        // ponytail: per app frame (condition_met after the newest frame), not per sample.
         g.next_index = tr.end;
         return;
     }

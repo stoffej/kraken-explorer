@@ -540,6 +540,10 @@ void draw_link_buttons(App& app, const Iface& iface)
     {
         toggle_link(app, iface);
     }
+    if (app.measuring && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("Stop the measurement first");
+    }
     if (iface.info.details == "vcan")
     {
         ImGui::SameLine();

@@ -82,6 +82,25 @@ TEST_CASE("condition_holds: every operator")
     CHECK_FALSE(condition_holds(ConditionOp::NotEqual, 1, 1));
 }
 
+TEST_CASE("state: off when disabled, armed while waiting, triggered while the conditions hold")
+{
+    const Setup setup = make_setup();
+    ConditionalLogging cl;
+    CHECK(conditional_logging_state(cl) == TriggerState::Off);
+    CHECK(std::string(trigger_state_label(TriggerState::Off)).empty());
+    ConditionalLoggingConfig cfg{.enabled = true};
+    cfg.conditions.push_back({.signal = signal(setup, "Speed"), .op = ConditionOp::Greater, .threshold = 50.0});
+    conditional_logging_apply(cl, cfg);
+    CHECK(conditional_logging_state(cl) == TriggerState::Armed);
+    CHECK(trigger_state_label(TriggerState::Armed) == std::string("Armed: waiting for trigger"));
+    const auto now = std::chrono::steady_clock::now();
+    conditional_logging_process(cl, setup, frame(60.0, 1.0), now);
+    CHECK(conditional_logging_state(cl) == TriggerState::Triggered);
+    CHECK(trigger_state_label(TriggerState::Triggered) == std::string("Triggered: logging"));
+    conditional_logging_process(cl, setup, frame(10.0, 2.0), now);
+    CHECK(conditional_logging_state(cl) == TriggerState::Armed);
+}
+
 TEST_CASE("conditions_met: AND needs every value, OR any; no conditions never")
 {
     const Setup setup = make_setup();

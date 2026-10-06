@@ -87,6 +87,17 @@ struct ConditionalLogging
     FileDialog file_dialog; // Browse...
 };
 
+// Off: disabled. Armed: enabled, waiting for the conditions. Triggered: they hold, the CSV is written.
+enum class TriggerState : uint8_t
+{
+    Off,
+    Armed,
+    Triggered
+};
+[[nodiscard]] TriggerState conditional_logging_state(const ConditionalLogging& cl) noexcept;
+// "Armed: waiting for trigger" / "Triggered: logging"; "" when off.
+[[nodiscard]] const char* trigger_state_label(TriggerState s) noexcept;
+
 inline constexpr std::chrono::milliseconds conditional_logging_stale{1500}; // value dropped without an update
 inline constexpr double conditional_logging_pre_seconds = 5.0;
 

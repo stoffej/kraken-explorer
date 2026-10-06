@@ -730,6 +730,37 @@ TEST_CASE("remove keeps the XY X signal; a new signal gets an unused colour; Tex
 #include "db/dbc/dbc_parser.h"
 #include "ui/frame_cache.h"
 
+TEST_CASE("conditional logging: no live frames are taken while armed, the graph starts when triggered")
+{
+    App app;
+    SetupNetwork& net = app.setup.networks.emplace_back();
+    net.name = "net";
+    net.can_dbs.push_back(std::make_shared<CanDb>());
+    REQUIRE(dbc_parse("BO_ 273 Msg: 1 ECU\n SG_ Sig : 0|8@1+ (1,0) [0|255] \"\" Vector__XXX\n", *net.can_dbs[0]));
+    setup_rebuild_cache(app.setup);
+    GraphState g;
+    GraphSignal& s = g.signals.emplace_back();
+    s.network = "net";
+    s.name = "Sig";
+    s.can_raw_id = 0x111;
+    const auto push = [&](int64_t ns, uint8_t v)
+    {
+        BusMessage m{.id = 0x111, .ts_ns = ns};
+        set_length(m, 1);
+        m.data[0] = v;
+        trace_append(app.trace, {&m, 1});
+    };
+    app.conditional_logging.config.enabled = true; // armed: no condition holds yet
+    push(1'000'000, 1);
+    graph_ingest(g, app);
+    CHECK(s.t.empty());
+    app.conditional_logging.condition_met = true;
+    push(2'000'000, 2);
+    graph_ingest(g, app);
+    REQUIRE(s.v.size() == 1);
+    CHECK(s.v[0] == 2.0);
+}
+
 TEST_CASE("file view: a signal's pyramid is built off the main thread; a zoomed-out window keeps the spike")
 {
     // 64 * 4096 frames of 0x111 at 1 ms, byte 0 = a sawtooth with one 255 spike: level 1 gets 4096 buckets.

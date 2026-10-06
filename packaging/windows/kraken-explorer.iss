@@ -12,6 +12,10 @@ AppVersion={#Version}
 AppVerName=Kraken Explorer {#Version}
 AppPublisher=Kraken Explorer
 AppPublisherURL=https://github.com/stoffej/kraken-explorer
+; Properties > Details of setup.exe; code signing (SignPath) requires product name and version.
+VersionInfoVersion={#Version}
+VersionInfoProductName=Kraken Explorer
+VersionInfoProductTextVersion={#Version}
 ; The folder install.bat of the zip uses.
 DefaultDirName={autopf}\Kraken Explorer
 DisableProgramGroupPage=yes

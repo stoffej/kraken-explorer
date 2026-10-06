@@ -306,6 +306,7 @@ void app_frame(App& app)
         }
     }
     draw_help_overlay(app.menu); // "?"
+    ink_frame(app.ink);          // "ink" typed: ink over everything
     // Handlers in this frame take their commands with menu_take(); whatever nobody took expires here.
     app.menu.pending.reset();
 }

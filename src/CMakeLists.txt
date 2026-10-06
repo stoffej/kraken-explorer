@@ -15,7 +15,8 @@ target_link_libraries(kraken-explorer PRIVATE imgui kraken_app)
 if(WIN32)
     # The manifest (UTF-8 code page) of every executable: the app and the tests.
     add_library(kraken_manifest INTERFACE)
-    target_sources(kraken_manifest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/windows/kraken-explorer.rc)
+    configure_file(windows/kraken-explorer.rc.in kraken-explorer.rc @ONLY)
+    target_sources(kraken_manifest INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/kraken-explorer.rc)
     if(MINGW)
         # GCC adds its own default-manifest.o to every link. Next to ours ld reports "multiple
         # non-default manifests" and a Release link crashes (binutils 2.47), leaving a truncated

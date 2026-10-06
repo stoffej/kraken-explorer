@@ -195,6 +195,8 @@ jobs:
   windows:
     name: Windows (MinGW-w64) tests + zip + installer
     runs-on: windows-latest
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
     steps:
     - name: Checkout repository
@@ -223,7 +225,11 @@ jobs:
       run: |
         if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
 
-    - name: Build zip and installer
+    # Code signing: SignPath Foundation (free for open source) signs kraken-explorer.exe and
+    # then setup.exe in its cloud; each pass uploads the unsigned file as a GitHub artifact and
+    # waits for the signed one. Without the SIGNPATH_API_TOKEN secret (pull requests, forks)
+    # the packages are built unsigned. Setup: docs/windows-port.md "Code signing".
+    - name: Build and stage
       shell: pwsh
       env:
         # Tests on: the same build tree runs ctest below.
@@ -231,8 +237,57 @@ jobs:
       run: |
         $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
         g++ --version
-        scripts\build_win_zip.ps1 -Build build
+        scripts\build_win_zip.ps1 -Build build -StageOnly
+        $Stage = (Get-Item build\kraken-explorer-*-win64).FullName
+        "STAGE=$Stage" >> $env:GITHUB_ENV
+
+    - name: Upload unsigned exe
+      id: unsigned-exe
+      if: env.SIGNPATH_API_TOKEN != ''
+      uses: actions/upload-artifact@v6
+      with:
+        name: unsigned-exe
+        path: ${{ env.STAGE }}/kraken-explorer.exe
+        retention-days: 1
+
+    - name: Sign exe
+      if: env.SIGNPATH_API_TOKEN != ''
+      uses: signpath/github-action-submit-signing-request@v1
+      with:
+        api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+        organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+        project-slug: kraken-explorer
+        signing-policy-slug: ${{ github.ref_type == 'tag' && 'release-signing' || 'test-signing' }}
+        github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+        wait-for-completion: true
+        output-artifact-directory: ${{ env.STAGE }}
+
+    - name: Zip and installer
+      shell: pwsh
+      run: |
+        scripts\build_win_zip.ps1 -Build build -PackageOnly
         if (-not (Test-Path build\kraken-explorer-*-win64-setup.exe)) { throw "no setup.exe built" }
+
+    - name: Upload unsigned installer
+      id: unsigned-setup
+      if: env.SIGNPATH_API_TOKEN != ''
+      uses: actions/upload-artifact@v6
+      with:
+        name: unsigned-setup
+        path: build/kraken-explorer-*-win64-setup.exe
+        retention-days: 1
+
+    - name: Sign installer
+      if: env.SIGNPATH_API_TOKEN != ''
+      uses: signpath/github-action-submit-signing-request@v1
+      with:
+        api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+        organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+        project-slug: kraken-explorer
+        signing-policy-slug: ${{ github.ref_type == 'tag' && 'release-signing' || 'test-signing' }}
+        github-artifact-id: ${{ steps.unsigned-setup.outputs.artifact-id }}
+        wait-for-completion: true
+        output-artifact-directory: build
 
     - name: Build and run tests
       shell: pwsh
@@ -270,6 +325,7 @@ jobs:
       uses: actions/download-artifact@v7
       with:
         path: dist
+        pattern: KrakenExplorer-*
         merge-multiple: true
 
     # A new release is a draft, published by hand on the releases page (which also creates the

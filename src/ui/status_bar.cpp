@@ -100,34 +100,49 @@ void draw_menu_status(const App& app, const StatusBarState& s)
                         : link == Link::Failed  ? "No interface"
                                                 : "Disconnected";
     const std::string rate = std::format("{:.0f} frames/s", s.rate);
+    const TriggerState trig = conditional_logging_state(app.conditional_logging);
     const ImGuiStyle& style = ImGui::GetStyle();
-    const float w = ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f + style.ItemSpacing.x
-                    + ImGui::CalcTextSize(rate.c_str()).x + style.ItemSpacing.x * 2.0f;
-    const float x = ImGui::GetWindowContentRegionMax().x - w;
+    const auto pill_w = [&](const char* text) { return ImGui::CalcTextSize(text).x + style.FramePadding.x * 2.0f; };
+    float w = pill_w(label) + style.ItemSpacing.x + ImGui::CalcTextSize(rate.c_str()).x + style.ItemSpacing.x * 2.0f;
+    if (trig != TriggerState::Off)
+    {
+        w += pill_w(trigger_state_label(trig)) + style.ItemSpacing.x;
+    }
+    float x = ImGui::GetWindowContentRegionMax().x - w;
     if (x <= ImGui::GetCursorPosX())
     {
         return; // window too narrow, the menus win
     }
-    ImGui::SetCursorPosX(x);
+    // A rounded pill at x: text on bg. Returns its width.
+    const auto pill = [&](float at, const char* text, ImU32 bg, ImU32 fg)
+    {
+        ImGui::SetCursorPosX(at);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const ImVec2 size(pill_w(text), ImGui::GetFrameHeight());
+        ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg, size.y * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Text, fg);
+        ImGui::SetCursorPosX(at + style.FramePadding.x);
+        ImGui::TextUnformatted(text);
+        ImGui::PopStyleColor();
+        return size.x;
+    };
+    constexpr ImU32 dark_text = IM_COL32(0x1a, 0x12, 0x02, 255);
+    if (trig != TriggerState::Off)
+    {
+        // Conditional logging: brass while armed (waiting), coral once triggered (CSV being written).
+        const ImU32 bg = trig == TriggerState::Armed ? theme_u32(theme_kraken_button().border) : theme_u32(theme_stop_button().border);
+        x += pill(x, trigger_state_label(trig), bg, dark_text) + style.ItemSpacing.x;
+        ImGui::SameLine(x);
+    }
     // Pills: teal = all up, brass = partial, coral = none; idle blends into the frame.
     const ImU32 bg = link == Link::Connected ? theme_u32(theme_kraken_button().fill)
                      : link == Link::Partial ? theme_u32(theme_kraken_button().border)
                      : link == Link::Failed  ? theme_u32(theme_stop_button().border)
                                              : ImGui::GetColorU32(ImGuiCol_FrameBg);
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const ImVec2 size(ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f, ImGui::GetFrameHeight());
-    ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg,
-                                              size.y * 0.5f);
-    if (link != Link::Idle)
-    {
-        ImGui::PushStyleColor(ImGuiCol_Text, link == Link::Connected ? theme_u32(theme_kraken_button().text) : IM_COL32(0x1a, 0x12, 0x02, 255));
-    }
-    ImGui::SetCursorPosX(x + style.FramePadding.x);
-    ImGui::TextUnformatted(label);
-    if (link != Link::Idle)
-    {
-        ImGui::PopStyleColor();
-    }
-    ImGui::SameLine(x + size.x + style.ItemSpacing.x * 2.0f);
+    const ImU32 fg = link == Link::Connected ? theme_u32(theme_kraken_button().text)
+                     : link == Link::Idle    ? ImGui::GetColorU32(ImGuiCol_Text)
+                                             : dark_text;
+    const float pw = pill(x, label, bg, fg);
+    ImGui::SameLine(x + pw + style.ItemSpacing.x * 2.0f);
     ImGui::TextUnformatted(rate.c_str());
 }
