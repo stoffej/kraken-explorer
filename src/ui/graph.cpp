@@ -2343,18 +2343,15 @@ void draw_graph_windows(App& app, WorkspaceTab* current)
         g.standalone = standalone;
         g.dock_into = dock_into;
     }
-    // Replay clears the file view when it appends frames (trace_append). Restore it when no
-    // replay is running so graph signals and value search can use the LOD pyramid without
-    // having to replay the file again.
-    if (app.trace.file.empty() && app.trace_file != nullptr && !app.measuring)
+    // Replay clears the file view when it appends frames (trace_append). Restore it when the
+    // replay ends so graph signals and value search can use the LOD pyramid without having to
+    // replay the file again. Only then: a Clear, or a measurement's frames, must stay.
+    const bool any_running = std::ranges::any_of(app.replays, [](const auto& kv) { return kv.second.running.load(); });
+    if (app.replay_was_running && !any_running && app.trace.file.empty() && app.trace_file != nullptr && !app.measuring)
     {
-        const bool any_running = std::ranges::any_of(app.replays,
-            [](const auto& kv) { return kv.second.running.load(); });
-        if (!any_running)
-        {
-            trace_open_file(app.trace, app.trace_file->recs, app.trace_file->overflow);
-        }
+        trace_open_file(app.trace, app.trace_file->recs, app.trace_file->overflow);
     }
+    app.replay_was_running = any_running;
     for (auto& tab : app.workspace.tabs)
     {
         if (std::none_of(tab.graphs.begin(), tab.graphs.end(), [](const GraphState& g) { return g.id == 0; }))
@@ -2394,7 +2391,7 @@ void graph_show_range(GraphState& g, const Setup& setup, const SignalEntry& e, i
     }
     const double a = static_cast<double>(t0_ns - g.start_ns) * 1e-9;
     const double b = static_cast<double>(t1_ns - g.start_ns) * 1e-9;
-    const double pad = std::max((b - a) * 0.25, 0.5);
+    const double pad = std::max((b - a) * 0.25, 5.0); // a single sample: 10 s of context around it
     g.follow = false;
     g.x_min = a - pad;
     g.x_max = b + pad;

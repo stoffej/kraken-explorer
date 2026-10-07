@@ -1548,18 +1548,21 @@ void replay_run(std::stop_token stop, Replay& r, std::deque<Iface>& ifaces, Task
             r.play_cache != nullptr ? r.play_cache->overflow : std::span<const FrameCachePayload>{};
         auto start = steady_clock::now();
         ReplayStep step;
+        bool brk_pending = false; // a time breakpoint on a frame the filter skips: the next sent frame pauses
         for (std::size_t i = 0; i < frames.size(); ++i)
         {
             if (!replay_step(frame_cache_decode(frames[i], overflow), frames.front().ts_ns, r.play_rows, r.play_mapping, step))
             {
                 r.position = i + 1;
+                brk_pending = brk_pending || std::ranges::binary_search(r.play_breaks, i);
                 continue;
             }
             any = any || step.at_ns > 0;
             const auto offset = duration_cast<steady_clock::duration>(duration<double, std::nano>(speed > 0.0 ? static_cast<double>(step.at_ns) / speed : 0.0));
             const ReplayIdRow* row = find_row(r.play_rows, step.msg);
-            if ((row != nullptr && row->brk) || std::ranges::binary_search(r.play_breaks, i))
+            if ((row != nullptr && row->brk) || brk_pending || std::ranges::binary_search(r.play_breaks, i))
             {
+                brk_pending = false;
                 int playing = replay_playing; // a step onto the frame pauses after it anyway
                 r.hold.compare_exchange_strong(playing, replay_paused);
             }

@@ -363,6 +363,13 @@ bool workspace_load(App& app, const std::string& path)
     WorkspaceTabs& ws = app.workspace;
     ws.tabs.clear();
     app.tx_generators.clear(); // joins their sender threads
+    for (auto& [uid, r] : app.replays)
+    {
+        replay_stop(r); // the loaded file's uids are reused: the old tabs' players must not reappear
+    }
+    app.replays.clear();
+    app.value_searches.clear();
+    app.dbc_editors.clear();
     app.lin_controls.clear();
     app.instrument_panels.clear();
     app.watch_windows.clear();

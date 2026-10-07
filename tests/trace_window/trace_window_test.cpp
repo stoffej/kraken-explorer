@@ -665,12 +665,13 @@ TEST_CASE("y on a Monitor row with DBC signals keeps its Index; expanded signal 
         CHECK(line.find("Engine") != std::string::npos);
         CHECK_FALSE(line.ends_with("\t2"));
 
-        // Expand row 0 (tree node id: table id -> PushID(agg index) -> &row, in the table's scroll window).
+        // Expand row 0 (tree node id: table id -> PushID(agg index) -> the row's order as a
+        // pointer, in the table's scroll window).
         const ImGuiTable* t = agg_table();
         REQUIRE(t != nullptr);
         const int i0 = 0;
         const ImGuiID row_seed = ImHashData(&i0, sizeof(int), t->ID);
-        const void* ptr = &s.agg[0];
+        const void* ptr = reinterpret_cast<const void*>(static_cast<uintptr_t>(s.agg[0].order));
         t->InnerWindow->StateStorage.SetInt(ImHashData(&ptr, sizeof(void*), row_seed), 1);
         draw_frame(app, s, tab);
         ImGui::SetClipboardText("");

@@ -446,6 +446,21 @@ namespace
 // the Log shows it. A click shows the frame in the Trace window and the Graph around it.
 void draw_hits(App& app, ValueSearch& v, WorkspaceTab& tab)
 {
+    // Hits name frames that are gone: all of them when the trace was cleared or left its file
+    // view (begin jumps past every old index), the oldest when a live trace pruned a chunk.
+    if (!v.hits.empty() && (v.hits.front().index < app.trace.begin || v.hits.back().index >= app.trace.end))
+    {
+        const auto first = v.hits.back().index < app.trace.end
+                               ? std::ranges::lower_bound(v.hits, app.trace.begin, {}, &ValueHit::index)
+                               : v.hits.end();
+        const auto dropped = static_cast<int>(first - v.hits.begin());
+        v.hits.erase(v.hits.begin(), first);
+        v.selected = v.selected >= dropped ? v.selected - dropped : -1;
+        if (v.hits.empty())
+        {
+            v.status = "the trace changed: search again";
+        }
+    }
     constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuter
                                       | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
     if (!ImGui::BeginTable("##hits", v.raw ? 4 : 3, flags))

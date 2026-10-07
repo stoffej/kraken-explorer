@@ -119,7 +119,10 @@ void poll_shortcuts(App& app)
     // loaded file (file view) is never dropped by it, only by the Clear button (an Esc meant for the
     // copy menu cleared an 8 GB view in a GUI test).
     const bool popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || help_overlay_is_open()
-                            || ImGui::GetIO().WantTextInput || !app.trace.file.empty();
+                            || ImGui::GetIO().WantTextInput || !app.trace.file.empty() || app.conditional_logging.open;
+    // A modal (Setup, Settings, a file dialog) owns the keyboard: F5 behind Setup would start on
+    // the old setup, Ctrl+Alt+S behind Settings would replace it.
+    const bool modal_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     if (app.menu.capturing_shortcut || app.macros.capture)
     {
         return; // the key being recorded must not run a command
@@ -128,7 +131,7 @@ void poll_shortcuts(App& app)
     {
         const auto cmd = static_cast<Command>(i);
         const ImGuiKeyChord chord = command_chord(app.menu, cmd);
-        if (chord == ImGuiKey_None || (chord == ImGuiKey_Escape && popup_open) || !enabled(app, cmd))
+        if (chord == ImGuiKey_None || modal_open || (chord == ImGuiKey_Escape && popup_open) || !enabled(app, cmd))
         {
             continue;
         }
@@ -270,19 +273,20 @@ void pill_button(App& app, const char* label, Icon icon, Command cmd, const Them
     }
 }
 
-void command_tooltip(Command cmd)
+void command_tooltip(const MainMenu& menu, Command cmd)
 {
     const CommandInfo& ci = info(cmd);
+    const int chord = command_chord(menu, cmd); // the user's binding, not the default
     const char* label = ci.label;
     const auto hidden = std::string_view(label).find("##"); // "Graph View##widget"
     const int len = static_cast<int>(hidden == std::string_view::npos ? std::strlen(label) : hidden);
-    if (ci.chord == ImGuiKey_None)
+    if (chord == ImGuiKey_None)
     {
         ImGui::SetItemTooltip("%.*s", len, label);
     }
     else
     {
-        ImGui::SetItemTooltip("%.*s (%s)", len, label, ImGui::GetKeyChordName(ci.chord));
+        ImGui::SetItemTooltip("%.*s (%s)", len, label, ImGui::GetKeyChordName(chord));
     }
 }
 
@@ -392,7 +396,7 @@ void draw_control_bar(App& app)
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 9.0f * px));
         pill_button(app, kraken_label, Icon::PlaybackStart, Command::MeasurementStart, theme_kraken_button(), 2.0f * px, px);
         ImGui::PopStyleVar();
-        command_tooltip(Command::MeasurementStart);
+        command_tooltip(app.menu, Command::MeasurementStart);
         const float pill_y = ImGui::GetItemRectMin().y - ImGui::GetWindowPos().y + ImGui::GetScrollY();
         same_line_or_wrap(pill_width("Stop", px));
         if (ImGui::GetCursorPosY() == pill_y)
@@ -400,7 +404,7 @@ void draw_control_bar(App& app)
             ImGui::SetCursorPosY(pill_y + dy); // the rest of the row follows Stop's y through SameLine
         }
         pill_button(app, "Stop", Icon::PlaybackStop, Command::MeasurementStop, theme_stop_button(), 1.5f * px, px);
-        command_tooltip(Command::MeasurementStop);
+        command_tooltip(app.menu, Command::MeasurementStop);
 
         const char* setup = "Setup Interface...";
         group_gap(command_button_width(setup), group);
@@ -504,7 +508,7 @@ void command_button(App& app, Command cmd, Icon icon, const char* label)
     ImGui::BeginDisabled(!enabled(app, cmd));
     const bool pressed = icon_text_button(label, icon);
     ImGui::EndDisabled();
-    command_tooltip(cmd);
+    command_tooltip(app.menu, cmd);
     if (pressed)
     {
         run(app, cmd);
@@ -538,7 +542,8 @@ int chord_capture()
     {
         const auto key = static_cast<ImGuiKey>(k);
         const bool modifier = (key >= ImGuiKey_LeftCtrl && key <= ImGuiKey_RightSuper) || key >= ImGuiKey_ReservedForModCtrl;
-        if (modifier || !ImGui::IsKeyPressed(key, false))
+        const bool mouse = key >= ImGuiKey_MouseLeft && key <= ImGuiKey_MouseWheelY; // aliased to keys: a click or a wheel tick is no chord
+        if (modifier || mouse || !ImGui::IsKeyPressed(key, false))
         {
             continue;
         }

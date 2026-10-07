@@ -88,10 +88,16 @@ void workspace_close_tab(App& app, unsigned uid)
     ws.tabs.erase(it);
     app.trace_windows.erase(uid);
     app.tx_generators.erase(uid); // joins its sender thread
-    app.replays.erase(uid);
+    if (const auto r = app.replays.find(uid); r != app.replays.end())
+    {
+        replay_stop(r->second); // a paused player waits on its hold: the jthread's join alone would hang
+        app.replays.erase(r);
+    }
     app.lin_controls.erase(uid);
     app.instrument_panels.erase(uid);
     app.watch_windows.erase(uid);
+    app.value_searches.erase(uid);
+    app.dbc_editors.erase(uid);
     if (index < ws.current || ws.current >= static_cast<int>(ws.tabs.size()))
     {
         --ws.current;

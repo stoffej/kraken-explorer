@@ -949,6 +949,12 @@ TEST_CASE("file view: the graph centres on the Log's selected row (Value Search 
         frame();
         CHECK(g.log_t == doctest::Approx(4.997));
         CHECK(g.x_min == 4.0);
+        // A Value Search hit in the aggregated view still moves the Log's file position (its
+        // top row), so the graph goes to the hit: window around 8 s.
+        trace_window_select_frame(s, app.trace, app.trace.begin + 8000, 3);
+        frame();
+        CHECK(g.log_t == doctest::Approx(7.997));
+        CHECK(g.x_min == doctest::Approx(6.997));
         app.workspace.tabs[0].graphs.clear();
         app.trace_file.reset();
     }

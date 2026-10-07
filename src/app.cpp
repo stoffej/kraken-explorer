@@ -26,6 +26,14 @@ void app_workspace_run(App& app, Command cmd, const std::string& recent_path)
         trace_clear(app.trace);
         app.workspace.tabs.clear(); // draw_workspace adds a fresh default tab
         app.tx_generators.clear();  // else orphaned generators keep their rows (and threads)
+        for (auto& [uid, r] : app.replays)
+        {
+            replay_stop(r); // else the player keeps filling the new trace, with no window to stop it
+        }
+        app.replays.clear();
+        app.trace_windows.clear();
+        app.lin_controls.clear();
+        app.value_searches.clear();
         app.instrument_panels.clear();
         app.watch_windows.clear();
         app.macros.items.clear();
@@ -340,19 +348,29 @@ void app_measurement_start(App& app)
     recorder_measurement_starting(app.recorder); // before the RX threads, so no first frame is missed
     ifaces_start(app.ifaces, app.setup, app.rx_consumers, app.tasks.wake);
     std::string down;
+    int enabled = 0;
     for (const auto& net : app.setup.networks)
     {
         for (const auto& si : net.interfaces)
         {
+            enabled += si.enabled;
             if (si.enabled && (si.iface < 0 || !app.ifaces[static_cast<size_t>(si.iface)].open))
             {
                 down += std::format("{}{}/{}", down.empty() ? "" : ", ", si.driver, si.name);
             }
         }
     }
-    if (!down.empty())
+    if (enabled == 0)
     {
-        log_warning(std::format("Measurement started without: {}", down));
+        down = "No interface selected: Setup Interfaces... to add one";
+        status_bar_notice(app.status_bar, down);
+        log_warning(down);
+    }
+    else if (!down.empty())
+    {
+        down = std::format("Measurement started without: {}", down);
+        status_bar_notice(app.status_bar, down);
+        log_warning(down);
     }
     app.measuring = true;
 }

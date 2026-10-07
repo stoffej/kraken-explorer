@@ -303,6 +303,7 @@ void draw_tree(App& app, SetupDialogState& s)
         {
             s.message = "Failed to reload: " + errors.front();
         }
+        app.setup.generation++; // the CanDbs are shared with app.setup: signal pointers into them died
         select(s, SetupSel::Databases, action_net);
         break;
     }
@@ -437,7 +438,7 @@ void draw_interfaces_page(App& app, SetupDialogState& s, SetupNetwork& net)
     draw_add_interfaces_popup(app, s, net);
 }
 
-void draw_databases_page(SetupDialogState& s, SetupNetwork& net)
+void draw_databases_page(App& app, SetupDialogState& s, SetupNetwork& net)
 {
     const int can_count = static_cast<int>(net.can_dbs.size());
     const int total = can_count + static_cast<int>(net.lin_dbs.size());
@@ -492,6 +493,7 @@ void draw_databases_page(SetupDialogState& s, SetupNetwork& net)
         {
             s.message = "Failed to reload: " + errors.front();
         }
+        app.setup.generation++; // the CanDbs are shared with app.setup: signal pointers into them died
     }
 }
 
@@ -510,7 +512,7 @@ void draw_page_widgets(App& app, SetupDialogState& s, SetupNetwork& net)
     case SetupSel::Databases:
     case SetupSel::CanDb:
     case SetupSel::LinDb:
-        draw_databases_page(s, net);
+        draw_databases_page(app, s, net);
         break;
     case SetupSel::Interface:
     {

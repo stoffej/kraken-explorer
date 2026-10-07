@@ -56,6 +56,7 @@ struct App
     Tasks tasks;      // work posted from other threads; tasks.wake doubles as the RX wake-up
     Trace trace;
     std::shared_ptr<const FrameCache> trace_file; // keeps the mapping of trace.file (a loaded file) alive
+    bool replay_was_running = false;  // last frame: the file view is restored when a replay ends
     std::unordered_map<unsigned, TraceWindowState> trace_windows; // per workspace tab uid
     std::unordered_map<unsigned, ValueSearch> value_searches;     // per workspace tab uid
     Recorder recorder; // follows menu.record_armed; not movable, so App stays put

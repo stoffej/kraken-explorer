@@ -269,3 +269,33 @@ TEST_CASE("raw search by id, by data and by both, file view and live")
         CHECK(hits.hits[0].index == f.app.trace.begin + 3); // frame 3: i = 3 -> (3/2)&1 == 1
     }
 }
+
+#include "ui_test.h"
+#include "ui/workspace_tabs.h"
+
+TEST_CASE("hits from before a trace clear are dropped: their indices name frames that are gone")
+{
+    UiTest ui;
+    Fixture f(false);
+    ValueSearch v;
+    v.setup_generation = f.app.setup.generation; // as after a pick: a changed setup also clears
+    v.hits = value_search_run(f.app, *f.angle_msg, *f.angle, 2.0, 3.0).hits;
+    REQUIRE(v.hits.size() == 202);
+    v.selected = 3;
+    WorkspaceTab tab;
+    const auto frame = [&]
+    {
+        ImGui::NewFrame();
+        ImGui::Begin("vs");
+        draw_value_search(f.app, v, tab);
+        ImGui::End();
+        ImGui::EndFrame();
+    };
+    frame();
+    CHECK(v.hits.size() == 202); // the trace is unchanged: kept
+    trace_clear(f.app.trace); // begin jumps past every old index
+    frame();
+    CHECK(v.hits.empty());
+    CHECK(v.selected == -1);
+    CHECK_FALSE(v.status.empty());
+}

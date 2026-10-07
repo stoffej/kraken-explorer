@@ -336,8 +336,8 @@ TEST_CASE("Value Search: the stretches of a value range, a click syncs the Log a
     CHECK(g.cursor_on);
     CHECK(g.cursor_a == doctest::Approx(14.0));
     CHECK(g.cursor_b == doctest::Approx(14.0));
-    CHECK(g.x_min == doctest::Approx(13.5));
-    CHECK(g.x_max == doctest::Approx(14.5));
+    CHECK(g.x_min == doctest::Approx(9.0)); // 5 s of context each side
+    CHECK(g.x_max == doctest::Approx(19.0));
     // The pyramid is built off the main thread: draw frames until it landed (ASan builds take a
     // few hundred ms), then the visible window is a slice of it: only those samples (plus a
     // neighbour each side).
@@ -349,9 +349,9 @@ TEST_CASE("Value Search: the stretches of a value range, a click syncs the Log a
     f.frame();
     const GraphSignal& sig = g.signals[0];
     REQUIRE_FALSE(sig.t.empty());
-    CHECK(sig.t.size() < 400);
-    CHECK(sig.t.front() >= 13.4);
-    CHECK(sig.t.back() <= 14.6);
+    CHECK(sig.t.size() < 1200);
+    CHECK(sig.t.front() >= 8.9);
+    CHECK(sig.t.back() <= 19.1);
     CHECK(graph_value_at(sig.t, sig.v, 14.005) == doctest::Approx(3.0)); // frame 1400: raw 1000 - 700
 }
 
@@ -429,7 +429,14 @@ TEST_CASE("graph: file view restored after replay clears it, new signal gets dat
     s.name = "Angle";
     g.signals.push_back(s);
 
-    // Frame: draw_graph_windows should restore file view (no replay running, trace_file set).
+    // A Clear (or a measurement's frames) is not a replay: the file does not come back by itself.
+    ImGui::NewFrame();
+    draw_graph_windows(f.app, nullptr);
+    ImGui::EndFrame();
+    REQUIRE(f.app.trace.file.empty());
+
+    // Frame: a replay was running last frame and ended: draw_graph_windows restores the file view.
+    f.app.replay_was_running = true;
     ImGui::NewFrame();
     draw_graph_windows(f.app, nullptr);
     ImGui::EndFrame();

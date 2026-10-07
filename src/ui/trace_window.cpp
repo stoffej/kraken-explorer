@@ -559,21 +559,27 @@ void trace_window_select_frame(TraceWindowState& s, const Trace& t, uint64_t ind
 {
     s.tab_goto = static_cast<int>(TraceTab::Monitor);
     s.autoscroll = false;
+    if (!t.file.empty())
+    {
+        // The Log's position, also behind the aggregated view: the graph follows it, and a
+        // switch to the Log view lands on the frame.
+        trace_window_goto(s, t, index - t.begin, context_rows);
+    }
     if (s.modes[static_cast<int>(TraceTab::Monitor)] == TraceViewMode::Aggregated)
     {
-        // The aggregated row of this frame's id, where it is in the sorted display order.
+        // The aggregated row of this frame's id, where it is in the sorted display order (a row
+        // the filter hides is left alone).
         const auto it = s.agg_index.find(agg_key(trace_at(t, index)));
-        if (it != s.agg_index.end())
+        const auto pos = it != s.agg_index.end() ? std::ranges::find(s.agg_order, it->second) : s.agg_order.end();
+        if (pos != s.agg_order.end())
         {
-            const auto pos = std::ranges::find(s.agg_order, it->second);
-            s.selected = pos != s.agg_order.end() ? static_cast<int>(pos - s.agg_order.begin()) : static_cast<int>(it->second);
+            s.selected = static_cast<int>(pos - s.agg_order.begin());
             s.nav_scroll = true;
         }
         return;
     }
     if (!t.file.empty())
     {
-        trace_window_goto(s, t, index - t.begin, context_rows);
         return;
     }
     const auto it = std::ranges::lower_bound(s.rolling, index, {}, &TraceRow::index);
@@ -589,7 +595,10 @@ void trace_window_goto(TraceWindowState& s, const Trace& t, uint64_t file_index,
                                                      - s.file_filtered.begin())
                             : file_index;
     row = std::min(row, n > 0 ? n - 1 : 0);
-    s.selected = static_cast<int>(std::min<uint64_t>(row, INT32_MAX));
+    if (s.modes[static_cast<int>(TraceTab::Monitor)] == TraceViewMode::Rolling)
+    {
+        s.selected = static_cast<int>(std::min<uint64_t>(row, INT32_MAX)); // a Log row; the aggregated view has its own
+    }
     s.file_top = row > context_rows ? row - context_rows : 0;
     s.autoscroll = false;
 }
@@ -1230,7 +1239,8 @@ bool has_signals(const App& app, const BusMessage& m)
 }
 
 // Index cell with a tree node when the row has children; returns whether it is open.
-bool tree_index_cell(Ctx& c, uint64_t n, bool has_children, const void* id)
+// id: the row's order of appearance; a pointer into the row vector dies when it grows.
+bool tree_index_cell(Ctx& c, uint64_t n, bool has_children, uint32_t id)
 {
     if (!has_children)
     {
@@ -1241,7 +1251,7 @@ bool tree_index_cell(Ctx& c, uint64_t n, bool has_children, const void* id)
     c.buf.clear();
     append_grouped(c.buf, n);
     yank_cell(c.buf);
-    return ImGui::TreeNodeEx(id, ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_NoTreePushOnOpen, "%s",
+    return ImGui::TreeNodeEx(reinterpret_cast<const void*>(static_cast<uintptr_t>(id)), ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_NoTreePushOnOpen, "%s",
                              c.buf.c_str());
 }
 
@@ -1335,7 +1345,7 @@ void draw_monitor_aggregated(Ctx& c, float px)
         const bool visible = y + ImGui::GetTextLineHeightWithSpacing() >= ImGui::GetWindowPos().y
                              && y <= ImGui::GetWindowPos().y + ImGui::GetWindowHeight();
         yank_row(c, r);
-        const bool open = tree_index_cell(c, row.order, has_signals(c.app, row.last), &row);
+        const bool open = tree_index_cell(c, row.order, has_signals(c.app, row.last), row.order);
         nav_row(c, r);
         // Off-screen rows keep only their index cell (one line, so the scroll height stays right):
         // formatting every cell of thousands of ids cost ~35 % of the main thread under a flood.
@@ -1667,7 +1677,7 @@ void draw_proto_aggregated(Ctx& c, ProtoView& v, float px)
         ImGui::PushID(static_cast<int>(i));
         ImGui::PushStyleColor(ImGuiCol_Text, proto_color(c, pm));
         yank_row(c, shown);
-        const bool open = tree_index_cell(c, row.order, !pm.metadata.empty() || !pm.raw_frames.empty(), &row);
+        const bool open = tree_index_cell(c, row.order, !pm.metadata.empty() || !pm.raw_frames.empty(), row.order);
         nav_row(c, shown++);
         proto_cells(c, row);
         ImGui::PopStyleColor();
@@ -1961,7 +1971,10 @@ void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab)
             {
                 s.tab = static_cast<TraceTab>(i);
                 s.scroll_pending = true;
-                s.selected = -1;
+                if (s.tab_goto != i || !s.nav_scroll)
+                {
+                    s.selected = -1; // a goto (Value Search hit) selected the row it lands on: kept
+                }
                 s.tab_goto = -1;
             }
             const bool rolling = s.modes[i] == TraceViewMode::Rolling;

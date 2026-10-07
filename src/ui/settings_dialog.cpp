@@ -47,6 +47,8 @@ void draw_settings_dialog(App& app, SettingsDialogState& s)
         {
             revert_preview(app, s);
         }
+        s.capture = -1; // closed mid-capture: the shortcuts must come back
+        app.menu.capturing_shortcut = false;
         return;
     }
     ImGui::SeparatorText("Appearance");

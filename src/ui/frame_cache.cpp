@@ -503,7 +503,8 @@ std::expected<FrameCache, std::string> frame_cache_build(const std::filesystem::
     mem_sequential(data.p, data.size);
 
     std::filesystem::create_directories(cache.parent_path(), ec);
-    const std::filesystem::path tmp = cache.string() + std::format(".{}.tmp", platform_pid());
+    static std::atomic<unsigned> build_seq{0}; // two builds of one file in this process (load + convert) must not share a tmp
+    const std::filesystem::path tmp = cache.string() + std::format(".{}.{}.tmp", platform_pid(), build_seq++);
     // Declared before the files and mappings: Windows cannot remove a file that is open or mapped.
     struct Remove
     {

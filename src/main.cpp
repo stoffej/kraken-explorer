@@ -396,8 +396,11 @@ int main(int argc, char** argv)
             {
                 last_wake = t1; // woken early: by an event, not the timeout
             }
-            else if (timeout == watch_tick)
+            else if (timeout == watch_tick && !wake_pending.load(std::memory_order_acquire))
             {
+                // A wake (a posted task, an RX batch) in the last 10 % of the tick looks like a
+                // timeout; skipping the frame then would leave wake_pending set and the task queued
+                // until the next input event (the REST API hung that way).
                 // Only the file watch asked for this wakeup: a stat per loaded file, no frame (a
                 // redraw a second cost 5-10 % CPU on a software GL rig, measured with perf).
                 for (auto& [uid, r] : app.replays)
