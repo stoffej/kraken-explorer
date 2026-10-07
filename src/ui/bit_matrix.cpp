@@ -117,7 +117,7 @@ void draw_bit_matrix(const CanDbMessage* msg, float cell_size)
     BitOwners owners;
     bit_matrix_owners(*msg, owners);
     ImFont* font = ImGui::GetFont();
-    const float font_size = std::max(6.0f * px, cell_h * 0.2f);
+    const float font_size = std::max(ImGui::GetFontSize(), cell_h * 0.3f); // the UI's text size, larger when zoomed in
     int index = 0;
     for (const CanDbSignal& sig : msg->signals)
     {

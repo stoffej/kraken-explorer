@@ -769,7 +769,10 @@ void draw_plots(App& app, GraphState& g, std::span<const int> slots, const Graph
                 {
                     continue;
                 }
-                first = first != nullptr ? first : &g.signals[i];
+                if (first == nullptr || (first->hidden && !g.signals[i].hidden))
+                {
+                    first = &g.signals[i]; // a hidden signal must not colour the axis of a shown one
+                }
                 ++on_axis;
                 if (label.find(g.signals[i].unit) == std::string::npos)
                 {
@@ -2318,6 +2321,18 @@ void draw_graph_windows(App& app, WorkspaceTab* current)
         g.id = id;
         g.standalone = standalone;
         g.dock_into = dock_into;
+    }
+    // Replay clears the file view when it appends frames (trace_append). Restore it when no
+    // replay is running so graph signals and value search can use the LOD pyramid without
+    // having to replay the file again.
+    if (app.trace.file.empty() && app.trace_file != nullptr && !app.measuring)
+    {
+        const bool any_running = std::ranges::any_of(app.replays,
+            [](const auto& kv) { return kv.second.running.load(); });
+        if (!any_running)
+        {
+            trace_open_file(app.trace, app.trace_file->recs, app.trace_file->overflow);
+        }
     }
     for (auto& tab : app.workspace.tabs)
     {

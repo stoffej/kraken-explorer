@@ -216,4 +216,4 @@ void replay_watch(App& app, Replay& r);
 
 // Runs autoplay (start/stop with the measurement) and, while r.open and tab is the current
 // workspace tab, draws its "Replay" window. Call for every tab that has a Replay.
-void draw_replay(App& app, const WorkspaceTab& tab, Replay& r);
+void draw_replay(App& app, WorkspaceTab& tab, Replay& r);

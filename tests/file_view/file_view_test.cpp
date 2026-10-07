@@ -22,6 +22,8 @@
 
 #include <imgui.h>
 #include <imgui_internal.h> // ActivateItemByID, FindWindowByName, ImHash*
+#include <implot.h>
+#include <implot_internal.h> // the plots' axis colours
 
 #include "app.h"
 #include "core/text.h"
@@ -351,4 +353,106 @@ TEST_CASE("Value Search: the stretches of a value range, a click syncs the Log a
     CHECK(sig.t.front() >= 13.4);
     CHECK(sig.t.back() <= 14.6);
     CHECK(graph_value_at(sig.t, sig.v, 14.005) == doctest::Approx(3.0)); // frame 1400: raw 1000 - 700
+}
+
+// Several signals share a Y axis: its text takes the colour of a shown one, not of a hidden one
+// listed before it, so the scale matches the curve drawn against it.
+TEST_CASE("graph: Y axis text in the colour of the first shown signal on it")
+{
+    const UiTest ui({1600, 900}, true, true);
+    FileView f;
+    f.app.workspace.tabs.push_back(f.tab);
+    WorkspaceTab& wtab = f.app.workspace.tabs.front();
+    GraphState& g = wtab.graphs.front();
+    const ImU32 hidden_col = IM_COL32(255, 0, 0, 255);
+    const ImU32 shown_col = IM_COL32(0, 255, 0, 255);
+    for (const ImU32 col : {hidden_col, shown_col})
+    {
+        g.signals.push_back(GraphSignal{.network = "Kraken", .can_msg = f.msg, .can_sig = f.angle, .can_raw_id = angle_id,
+                                        .name = "Angle", .unit = "deg", .color = col});
+    }
+    g.signals[0].hidden = true;
+    for (int i = 0; i < 3; ++i)
+    {
+        ImGui::NewFrame();
+        draw_graph_windows(f.app, &wtab);
+        ImGui::EndFrame();
+    }
+    const ImPool<ImPlotPlot>& plots = ImPlot::GetCurrentContext()->Plots;
+    REQUIRE(plots.GetBufSize() > 0);
+    bool found = false;
+    for (int i = 0; i < plots.GetBufSize(); ++i)
+    {
+        const ImPlotAxis& y1 = const_cast<ImPool<ImPlotPlot>&>(plots).GetByIndex(i)->Axes[ImAxis_Y1];
+        if (y1.Enabled && (y1.ColorTxt == hidden_col || y1.ColorTxt == shown_col))
+        {
+            found = true;
+            CHECK(y1.ColorTxt == shown_col);
+        }
+    }
+    CHECK(found);
+}
+
+// draw_graph_windows restores the file view after replay clears it so a signal added after replay
+// still gets data via the LOD pyramid without replaying again.
+TEST_CASE("graph: file view restored after replay clears it, new signal gets data")
+{
+    const UiTest ui({1600, 900}, true, true);
+    FileView f;
+
+    // Put the tab in the workspace so draw_graph_windows processes it.
+    f.app.workspace.tabs.push_back(f.tab);
+    WorkspaceTab& wtab = f.app.workspace.tabs.front();
+    GraphState& g = wtab.graphs.front(); // default graph (id 0)
+
+    // Confirm we start in file view.
+    REQUIRE_FALSE(f.app.trace.file.empty());
+    REQUIRE(f.app.trace_file != nullptr);
+
+    // --- Simulate replay: trace_append clears the file view. ---
+    BusMessage m{};
+    m.ts_ns = f.app.trace_file->recs.front().ts_ns;
+    trace_append(f.app.trace, std::span<const BusMessage>(&m, 1));
+    REQUIRE(f.app.trace.file.empty()); // replay cleared it
+
+    // Frame: graph_ingest detects the clear and enters live mode.
+    ImGui::NewFrame();
+    draw_graph_windows(f.app, nullptr);
+    ImGui::EndFrame();
+
+    // --- Add a graph signal while in live mode (no historical data available). ---
+    GraphSignal s;
+    s.kind = GraphSignalKind::Can;
+    s.can_msg = f.msg;
+    s.can_sig = f.angle;
+    s.network = "Kraken";
+    s.name = "Angle";
+    g.signals.push_back(s);
+
+    // Frame: draw_graph_windows should restore file view (no replay running, trace_file set).
+    ImGui::NewFrame();
+    draw_graph_windows(f.app, nullptr);
+    ImGui::EndFrame();
+
+    // File view must be back.
+    REQUIRE_FALSE(f.app.trace.file.empty());
+
+    // Next frame: graph_ingest sees the restored file view and starts a LOD job for the signal.
+    ImGui::NewFrame();
+    draw_graph_windows(f.app, nullptr);
+    ImGui::EndFrame();
+
+    REQUIRE(g.signals[0].lod_job != nullptr); // LOD job started
+
+    // Wait for the LOD job to finish (off-thread).
+    for (int i = 0; i < 500 && g.signals[0].lod == nullptr; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        ImGui::NewFrame();
+        draw_graph_windows(f.app, nullptr);
+        ImGui::EndFrame();
+    }
+
+    REQUIRE(g.signals[0].lod != nullptr);     // pyramid built
+    REQUIRE_FALSE(g.signals[0].t.empty());    // visible window populated
 }

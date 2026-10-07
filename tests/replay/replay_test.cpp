@@ -647,6 +647,48 @@ TEST_CASE("the channel checkbox in the filter table takes the click, not the tre
     CHECK_FALSE(r.data.rows[1].rx_on);
 }
 
+TEST_CASE("editing A / B (Play from / to) moves the tab's graph window and cursors there")
+{
+    UiTest ctx({1000, 700});
+    App app;
+    app.workspace.tabs.push_back({.uid = 9});
+    Replay r;
+    r.open = true;
+    load_candump(app, r, "(100.0) a 1#01\n(110.0) a 1#02\n(160.0) a 1#03\n", "replay_ab_graph");
+    r.mapping = {replay_trace_only};
+    GraphState& g = app.workspace.tabs[0].graphs.emplace_back();
+    g.start_ns = 100'000'000'000; // the file view's time base: the first frame
+    replay_frame(app, r);
+    replay_frame(app, r);
+    const double x_min0 = g.x_min;
+
+    const auto type_into = [&](const char* id, const char* text)
+    {
+        ImGuiWindow* w = ImGui::FindWindowByName(workspace_window_name(app.workspace.tabs[0], "Replay").c_str());
+        REQUIRE(w != nullptr);
+        ImGui::ActivateItemByID(w->GetID(id));
+        replay_frame(app, r);
+        for (const char* c = text; *c != '\0'; ++c)
+        {
+            ImGui::GetIO().AddInputCharacter(static_cast<ImWchar>(*c));
+            replay_frame(app, r);
+        }
+    };
+    type_into("##range_from", "10");
+    CHECK(r.range_from == "10");
+    CHECK(g.x_min != x_min0);
+    CHECK(g.x_min == doctest::Approx(10.0));
+    CHECK(g.x_max == doctest::Approx(60.0)); // B open: the end of the file
+    CHECK(g.cursor_on);
+    CHECK(g.cursor_a == doctest::Approx(10.0));
+    CHECK_FALSE(g.follow);
+
+    type_into("##range_to", "30");
+    CHECK(g.x_min == doctest::Approx(10.0));
+    CHECK(g.x_max == doctest::Approx(30.0));
+    CHECK(g.cursor_b == doctest::Approx(30.0));
+}
+
 // tests/.../gen_ref.py: python-can 4.6.1 BLFWriter (zlib containers, header v1, CAN_MESSAGE,
 // CAN_FD_MESSAGE_64, CAN_ERROR_EXT), six frames at 1700000000.00 + 10 ms steps.
 constexpr unsigned char python_can_blf[] = {

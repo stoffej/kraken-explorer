@@ -1777,7 +1777,7 @@ bool replay_load_poll(App& app, Replay& r)
     std::error_code ec;
     r.watched_size = r.data.path.empty() ? 0 : std::filesystem::file_size(r.data.path, ec);
     r.watched_mtime = r.data.path.empty() ? 0 : std::filesystem::last_write_time(r.data.path, ec).time_since_epoch().count();
-    if (r.data.cache != nullptr && !app.measuring)
+    if (r.data.cache != nullptr && !app.measuring && app.trace.file.data() != r.data.cache->recs.data())
     {
         // The whole file in the trace, mapped (a measurement owns the trace while it runs).
         trace_open_file(app.trace, r.data.cache->recs, r.data.cache->overflow);
@@ -1899,7 +1899,7 @@ void replay_watch(App& app, Replay& r)
     }
 }
 
-void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
+void draw_replay(App& app, WorkspaceTab& tab, Replay& r)
 {
     // Autoplay follows the measurement, whether or not the window is shown.
     if (app.measuring != r.was_measuring)
@@ -2028,6 +2028,8 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
             ImGui::TextUnformatted(std::filesystem::path(r.data.path).filename().string().c_str());
             ImGui::SetItemTooltip("%s", r.data.path.c_str());
         }
+        const std::string from0 = r.range_from; // A / B before this frame's edits (markers or fields)
+        const std::string to0 = r.range_to;
         const std::size_t in_range = replay_range(replay_frames(r.data), r.range_from, r.range_to).size();
         if (r.loader.joinable())
         {
@@ -2157,6 +2159,28 @@ void draw_replay(App& app, const WorkspaceTab& tab, Replay& r)
         ImGui::TextUnformatted("to");
         ImGui::SameLine();
         time_field("##range_to", "end", r.range_to);
+        if (const std::span<const FrameCacheRec> all = replay_frames(r.data);
+            (r.range_from != from0 || r.range_to != to0) && !all.empty())
+        {
+            // A / B moved: the tab's graphs show that stretch, with their cursors on its ends.
+            const double end = static_cast<double>(all.back().ts_ns - all.front().ts_ns) * 1e-9;
+            const double a = std::clamp(parse_duration(r.range_from).value_or(0.0), 0.0, end);
+            const double b = std::clamp(parse_duration(r.range_to).value_or(end), a, end);
+            for (GraphState& g : tab.graphs)
+            {
+                if (g.start_ns < 0)
+                {
+                    continue; // nothing ingested yet: no time base
+                }
+                const double base = static_cast<double>(all.front().ts_ns - g.start_ns) * 1e-9;
+                g.follow = false;
+                g.x_min = base + a;
+                g.x_max = base + std::max(b, a + 1e-3);
+                g.cursor_on = true;
+                g.cursor_a = base + a;
+                g.cursor_b = base + b;
+            }
+        }
         ImGui::SameLine();
         std::string count;
         append_grouped(count, in_range);
