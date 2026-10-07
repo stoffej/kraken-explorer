@@ -839,3 +839,122 @@ TEST_CASE("file view: a signal's pyramid is built off the main thread; a zoomed-
     std::filesystem::remove(src);
     std::filesystem::remove(cache);
 }
+
+#include "ui/trace_window.h"
+
+TEST_CASE("file view: the graph centres on the Log's selected row (Value Search hit, j/k), not on a scroll")
+{
+    ImGui::CreateContext();
+    ImPlot::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = {1400, 900};
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    theme_load_fonts(15.0f);
+
+    // 10 000 frames at 1 ms: frame i is at i ms on the graph's X axis.
+    const std::size_t n = 10'000;
+    const auto src = std::filesystem::temp_directory_path() / std::format("kraken_graph_sel_{}.log", getpid());
+    const auto cache = std::filesystem::temp_directory_path() / std::format("kraken_graph_sel_{}.kfc", getpid());
+    {
+        std::ofstream out(src, std::ios::binary);
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            out << std::format("({:.6f}) vcan0 111#{:02X}\n", static_cast<double>(i) * 1e-3, i % 100);
+        }
+    }
+    {
+        auto built = frame_cache_build(src, cache, TraceFileFormat::CanDump);
+        REQUIRE(built.has_value());
+        frame_cache_close(*built);
+        frame_cache_wait_saved();
+    }
+    auto c = frame_cache_open(src, cache);
+    REQUIRE(c.has_value());
+    {
+        App app;
+        app.trace_file = std::make_shared<FrameCache>(*c);
+        trace_open_file(app.trace, app.trace_file->recs, app.trace_file->overflow);
+        SetupNetwork& net = app.setup.networks.emplace_back();
+        net.name = "net";
+        net.can_dbs.push_back(std::make_shared<CanDb>());
+        REQUIRE(dbc_parse("BO_ 273 Msg: 1 ECU\n SG_ Sig : 0|8@1+ (1,0) [0|255] \"\" Vector__XXX\n", *net.can_dbs[0]));
+        setup_rebuild_cache(app.setup);
+        const auto frame = [&]
+        {
+            ImGui::NewFrame();
+            WorkspaceTab* tab = draw_workspace(app);
+            draw_graph_windows(app, tab);
+            ImGui::EndFrame();
+            app.menu.pending.reset();
+        };
+        frame();
+        REQUIRE(app.workspace.tabs.size() == 1);
+        GraphState& g = app.workspace.tabs[0].graphs[0];
+        REQUIRE(g.start_ns >= 0);
+        GraphSignal& sig = g.signals.emplace_back();
+        sig.network = "net";
+        sig.name = "Sig";
+        sig.can_raw_id = 0x111;
+        app.setup.generation++; // resolves the signal against the DBC
+        for (int i = 0; i < 1000 && sig.lod == nullptr; ++i) // the pyramid is built off the main thread
+        {
+            frame();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(sig.lod != nullptr);
+        // The curve drawn spans [lo, hi] (1 ms samples, one neighbour each side), not a stale part of it.
+        const auto drawn_in = [&](double lo, double hi)
+        {
+            return !sig.dec_t.empty() && std::abs(sig.dec_t.front() - lo) <= 2e-3 && std::abs(sig.dec_t.back() - hi) <= 2e-3;
+        };
+        TraceWindowState& s = app.trace_windows[app.workspace.tabs[0].uid];
+        s.modes[static_cast<int>(TraceTab::Monitor)] = TraceViewMode::Rolling; // the Log view
+        g.x_min = 0.0; // zoomed to 2 s
+        g.x_max = 2.0;
+        frame();
+        CHECK(g.x_min == 0.0); // nothing selected, the top row (0 s) is visible: unchanged
+        CHECK(g.log_t == 0.0);
+
+        // A Value Search hit puts the Log on frame 5000 with 3 rows above: the graph centres on
+        // the hit, not on the top row, and keeps its zoom.
+        trace_window_select_frame(s, app.trace, app.trace.begin + 5000, 3);
+        frame();
+        CHECK(g.log_t == doctest::Approx(5.0));
+        CHECK(g.x_min == doctest::Approx(4.0));
+        CHECK(g.x_max == doctest::Approx(6.0));
+
+        // j/k: a move inside the window still centres.
+        s.selected = 5500;
+        frame();
+        CHECK(g.x_min == doctest::Approx(4.5));
+        CHECK(g.x_max == doctest::Approx(6.5));
+        frame(); // the window moved mid-frame: its samples, as many as the old window's, arrive now
+        CHECK(drawn_in(4.5, 6.5));
+
+        // A pan with the same selection stays where the user put it.
+        g.x_min = 5.0;
+        g.x_max = 7.0;
+        frame();
+        CHECK(g.x_min == 5.0);
+
+        // The aggregated Monitor has no frame per row: the selection is not followed, the line
+        // falls back to the Log's top row (4.997 s), which is visible.
+        g.x_min = 4.0;
+        g.x_max = 6.0;
+        s.modes[static_cast<int>(TraceTab::Monitor)] = TraceViewMode::Aggregated;
+        s.selected = 7000;
+        frame();
+        CHECK(g.log_t == doctest::Approx(4.997));
+        CHECK(g.x_min == 4.0);
+        app.workspace.tabs[0].graphs.clear();
+        app.trace_file.reset();
+    }
+    frame_cache_close(*c);
+    std::filesystem::remove(src);
+    std::filesystem::remove(cache);
+    ImPlot::DestroyContext();
+    ImGui::DestroyContext();
+}

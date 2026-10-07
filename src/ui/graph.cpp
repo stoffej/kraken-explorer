@@ -816,7 +816,7 @@ void draw_plots(App& app, GraphState& g, std::span<const int> slots, const Graph
                 g.y_shown[static_cast<std::size_t>(row * graph_axes_per_plot + k)] = {y.Min, y.Max};
             }
         }
-        if (g.log_t >= 0.0) // the Log's position (file view)
+        if (g.log_t >= 0.0) // the Log's selected row or (file view) top row
         {
             ImPlotSpec line;
             line.LineColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
@@ -1426,35 +1426,55 @@ void draw_toolbar(App& app, GraphState& g)
 namespace
 {
 
-// File view: the graph keeps to the Log. The Log's top row is a line in the plot; when the Log
-// moves outside the visible window the window follows (same zoom), and a click in the plot puts
-// the Log on that time. ponytail: file view only, the live Log scrolls in pixels.
+// The graph keeps to the Log (its Log view, Monitor tab). A selected row (j/k, a Value Search hit)
+// is a line in the plot and the window centres on it whenever the selection moves (same zoom). In
+// a file view without a selection the line is the Log's top row, the window follows it when it
+// leaves the window, and a click in the plot puts the Log on that time. ponytail: the live Log
+// scrolls in pixels, so live only a selection is followed.
 void sync_with_log(App& app, const WorkspaceTab& tab, GraphState& g)
 {
     g.log_t = -1.0;
     const Trace& t = app.trace;
     const auto it = app.trace_windows.find(tab.uid);
-    if (t.file.empty() || g.start_ns < 0 || it == app.trace_windows.end())
+    if (g.start_ns < 0 || it == app.trace_windows.end())
     {
         g.click_t = -1.0;
         return;
     }
     TraceWindowState& s = it->second;
-    const bool filtered = !s.file_filtered.empty();
-    const uint64_t n = filtered ? s.file_filtered.size() : t.file.size();
-    if (g.click_t >= 0.0)
+    const bool file = !t.file.empty();
+    const bool filtered = file && !s.file_filtered.empty();
+    if (file && g.click_t >= 0.0)
     {
         const int64_t ts = g.start_ns + static_cast<int64_t>(g.click_t * 1e9);
         trace_window_goto(s, t, static_cast<uint64_t>(std::ranges::lower_bound(t.file, ts, {}, &FrameCacheRec::ts_ns) - t.file.begin()), 0);
-        g.click_t = -1.0;
+        g.log_sel = UINT64_MAX - 1; // moved to where the user clicked: no recentring
     }
-    if (n == 0)
+    g.click_t = -1.0;
+    const bool log_view = s.tab == TraceTab::Monitor && s.modes[static_cast<int>(TraceTab::Monitor)] == TraceViewMode::Rolling;
+    const uint64_t n = filtered ? s.file_filtered.size() : file ? t.file.size() : s.rolling.size();
+    const auto frame_at = [&](uint64_t row) // trace index of Log row `row`
+    {
+        return file ? t.begin + (filtered ? s.file_filtered[row] : row) : s.rolling[row].index;
+    };
+    uint64_t sel = UINT64_MAX;
+    if (log_view && s.selected >= 0 && static_cast<uint64_t>(s.selected) < n)
+    {
+        sel = frame_at(static_cast<uint64_t>(s.selected));
+    }
+    const bool moved = sel != g.log_sel && g.log_sel != UINT64_MAX - 1;
+    g.log_sel = sel;
+    if (sel == UINT64_MAX && (!file || n == 0))
     {
         return;
     }
-    const uint64_t top = std::min(s.file_top, n - 1);
-    g.log_t = static_cast<double>(t.file[filtered ? s.file_filtered[top] : top].ts_ns - g.start_ns) * 1e-9;
-    if (g.log_t < g.x_min || g.log_t > g.x_max)
+    const uint64_t index = sel != UINT64_MAX ? sel : frame_at(std::min(s.file_top, n - 1));
+    if (index < t.begin || index >= t.begin + trace_size(t))
+    {
+        return; // dropped from the trace since
+    }
+    g.log_t = static_cast<double>(trace_at(t, index).ts_ns - g.start_ns) * 1e-9;
+    if ((sel != UINT64_MAX && moved) || g.log_t < g.x_min || g.log_t > g.x_max)
     {
         const double half = (g.x_max - g.x_min) * 0.5;
         g.follow = false;
@@ -2160,6 +2180,7 @@ void graph_file_window(GraphState& g, const App& app)
     {
         s.t.clear();
         s.v.clear();
+        s.dec_key = {}; // new samples: a window of the same width can have the same count as the old one
         if (s.lod != nullptr)
         {
             graph_lod_window(*s.lod, graph_lod_level(*s.lod, g.x_min, g.x_max, g.plot_px), g.x_min, g.x_max, s.t, s.v);

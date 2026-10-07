@@ -372,6 +372,9 @@ void draw_control_bar(App& app)
                                        | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoScrollWithMouse;
     if (ImGui::BeginViewportSideBar(name, ImGui::GetMainViewport(), ImGuiDir_Up, height, flags))
     {
+        // Two layers: the buttons on top (1), the sea drawn after them goes underneath (0).
+        ImGui::GetWindowDrawList()->ChannelsSplit(2);
+        ImGui::GetWindowDrawList()->ChannelsSetCurrent(1);
         const float group = 20.0f * px; // gap between button groups
         // The Start pill is 8 px taller: centre the normal buttons of its row on it.
         const float dy = 4.0f * px;
@@ -420,6 +423,7 @@ void draw_control_bar(App& app)
         const float bottom = wp.y + ImGui::GetWindowHeight();
         const float level = bottom - sea;
         ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->ChannelsSetCurrent(0);
         const float step = 3.0f * px;
         const auto swell = [&](float x)
         { return level + (std::sin(x / (26.0f * px)) * 1.6f + std::sin(x / (9.0f * px) + 1.0f) * 1.0f) * px; };
@@ -444,6 +448,7 @@ void draw_control_bar(App& app)
             dl->PathLineTo(ImVec2(x, crest(x)));
         }
         dl->PathStroke(ImGui::GetColorU32(ImGuiCol_CheckMark, 0.85f), ImDrawFlags_None, 1.5f * px);
+        dl->ChannelsMerge();
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

@@ -175,7 +175,8 @@ struct GraphState
     std::vector<double> stride_v;
     std::array<double, 5> file_key{}; // file view: (x_min, x_max, signals, setup generation, plot_px) of the decoded window
     int plot_px = 1024;       // file view: plot width in pixels at the last draw, picks the pyramid level
-    double log_t = -1.0;      // file view: the Log's top row on the X axis (a line), < 0 = none
+    double log_t = -1.0;      // the Log's selected row (file view: else its top row) on the X axis (a line), < 0 = none
+    uint64_t log_sel = UINT64_MAX; // trace index of the Log's selected row last frame: the window centres when it changes
     double click_t = -1.0;    // file view: a click in the plot at this X moves the Log there, < 0 = none
     std::vector<double> scratch_t; // decimated points, reused every frame
     std::vector<double> scratch_v;
