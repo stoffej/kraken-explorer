@@ -13,20 +13,20 @@ DBC-decoded traffic on `vcan0`.
 
 ## Download
 
-Release [0.0.4](https://github.com/stoffej/kraken-explorer/releases/tag/0.0.4)
+Release [0.0.5](https://github.com/stoffej/kraken-explorer/releases/tag/0.0.5)
 ([all releases](https://github.com/stoffej/kraken-explorer/releases)):
 
 | Platform | Package |
 |---|---|
-| Ubuntu / Debian | [kraken-explorer_0.0.4_amd64.deb](https://github.com/stoffej/kraken-explorer/releases/download/0.0.4/kraken-explorer_0.0.4_amd64.deb) |
-| Linux, no install | [Kraken_Explorer-0.0.4-x86_64.AppImage](https://github.com/stoffej/kraken-explorer/releases/download/0.0.4/Kraken_Explorer-0.0.4-x86_64.AppImage) |
-| Windows installer | [kraken-explorer-0.0.4-win64-setup.exe](https://github.com/stoffej/kraken-explorer/releases/download/0.0.4/kraken-explorer-0.0.4-win64-setup.exe) |
-| Windows portable | [kraken-explorer-0.0.4-win64.zip](https://github.com/stoffej/kraken-explorer/releases/download/0.0.4/kraken-explorer-0.0.4-win64.zip) |
+| Ubuntu / Debian | [kraken-explorer_0.0.5_amd64.deb](https://github.com/stoffej/kraken-explorer/releases/download/0.0.5/kraken-explorer_0.0.5_amd64.deb) |
+| Linux, no install | [Kraken_Explorer-0.0.5-x86_64.AppImage](https://github.com/stoffej/kraken-explorer/releases/download/0.0.5/Kraken_Explorer-0.0.5-x86_64.AppImage) |
+| Windows installer | [kraken-explorer-0.0.5-win64-setup.exe](https://github.com/stoffej/kraken-explorer/releases/download/0.0.5/kraken-explorer-0.0.5-win64-setup.exe) |
+| Windows portable | [kraken-explorer-0.0.5-win64.zip](https://github.com/stoffej/kraken-explorer/releases/download/0.0.5/kraken-explorer-0.0.5-win64.zip) |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh   # Ubuntu / Debian: latest .deb + netdev group
-sudo apt install ./kraken-explorer_0.0.4_amd64.deb   # or by hand; icon, menu entry and SocketCAN polkit rule included
-chmod +x Kraken_Explorer-0.0.4-x86_64.AppImage && ./Kraken_Explorer-0.0.4-x86_64.AppImage
+sudo apt install ./kraken-explorer_0.0.5_amd64.deb   # or by hand; icon, menu entry and SocketCAN polkit rule included
+chmod +x Kraken_Explorer-0.0.5-x86_64.AppImage && ./Kraken_Explorer-0.0.5-x86_64.AppImage
 ```
 
 ### Code signing policy
