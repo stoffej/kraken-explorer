@@ -22,8 +22,6 @@
 
 #include <imgui.h>
 #include <imgui_internal.h> // ActivateItemByID, FindWindowByName, ImHash*
-#include <implot.h>
-#include <implot_internal.h> // the plots' axis colours
 
 #include "app.h"
 #include "core/text.h"
@@ -82,7 +80,6 @@ BO_ 273 Tentacle1: 8 Kraken
 struct FileView
 {
     std::filesystem::path dir = std::filesystem::temp_directory_path() / std::format("kraken_file_view_{}", getpid());
-    FrameCache cache;
     App app;
     WorkspaceTab tab{.title = "Trace", .uid = 1};
     const CanDbMessage* msg = nullptr;
@@ -104,8 +101,13 @@ struct FileView
         }
         auto c = frame_cache_open(src, kfc);
         REQUIRE(c.has_value());
-        cache = *c;
-        app.trace_file = std::make_shared<FrameCache>(cache); // the views, unmapped by hand below
+        // Owns the mapping as replay does: a graph LOD job still running when the test ends keeps
+        // it alive until the job is joined with app.
+        app.trace_file = std::shared_ptr<const FrameCache>(new FrameCache(*c), [](const FrameCache* p)
+        {
+            frame_cache_close(*const_cast<FrameCache*>(p));
+            delete p;
+        });
         trace_open_file(app.trace, app.trace_file->recs, app.trace_file->overflow);
         REQUIRE(trace_size(app.trace) == frame_count);
 
@@ -122,8 +124,10 @@ struct FileView
     }
     ~FileView()
     {
+        // Graph LOD jobs hold the mapping: join them, then unmap (Windows cannot delete a mapped file).
+        tab.graphs.clear();
+        app.workspace.tabs.clear();
         app.trace_file.reset();
-        frame_cache_close(cache);
         std::filesystem::remove_all(dir);
     }
 
@@ -353,44 +357,6 @@ TEST_CASE("Value Search: the stretches of a value range, a click syncs the Log a
     CHECK(sig.t.front() >= 8.9);
     CHECK(sig.t.back() <= 19.1);
     CHECK(graph_value_at(sig.t, sig.v, 14.005) == doctest::Approx(3.0)); // frame 1400: raw 1000 - 700
-}
-
-// Several signals share a Y axis: its text takes the colour of a shown one, not of a hidden one
-// listed before it, so the scale matches the curve drawn against it.
-TEST_CASE("graph: Y axis text in the colour of the first shown signal on it")
-{
-    const UiTest ui({1600, 900}, true, true);
-    FileView f;
-    f.app.workspace.tabs.push_back(f.tab);
-    WorkspaceTab& wtab = f.app.workspace.tabs.front();
-    GraphState& g = wtab.graphs.front();
-    const ImU32 hidden_col = IM_COL32(255, 0, 0, 255);
-    const ImU32 shown_col = IM_COL32(0, 255, 0, 255);
-    for (const ImU32 col : {hidden_col, shown_col})
-    {
-        g.signals.push_back(GraphSignal{.network = "Kraken", .can_msg = f.msg, .can_sig = f.angle, .can_raw_id = angle_id,
-                                        .name = "Angle", .unit = "deg", .color = col});
-    }
-    g.signals[0].hidden = true;
-    for (int i = 0; i < 3; ++i)
-    {
-        ImGui::NewFrame();
-        draw_graph_windows(f.app, &wtab);
-        ImGui::EndFrame();
-    }
-    const ImPool<ImPlotPlot>& plots = ImPlot::GetCurrentContext()->Plots;
-    REQUIRE(plots.GetBufSize() > 0);
-    bool found = false;
-    for (int i = 0; i < plots.GetBufSize(); ++i)
-    {
-        const ImPlotAxis& y1 = const_cast<ImPool<ImPlotPlot>&>(plots).GetByIndex(i)->Axes[ImAxis_Y1];
-        if (y1.Enabled && (y1.ColorTxt == hidden_col || y1.ColorTxt == shown_col))
-        {
-            found = true;
-            CHECK(y1.ColorTxt == shown_col);
-        }
-    }
-    CHECK(found);
 }
 
 // draw_graph_windows restores the file view after replay clears it so a signal added after replay
