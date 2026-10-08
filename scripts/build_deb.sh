@@ -11,14 +11,15 @@ cd "$(dirname "$0")/.."
 BUILD=${1:-build/deb}
 NAME=kraken-explorer
 ARCH=$(dpkg --print-architecture)
-VERSION=$(sed -nE 's/^project\(kraken_explorer VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
 MAINT=${DEB_MAINTAINER:-"$(git config user.name) <$(git config user.email)>"}
-test -n "$VERSION"
 
 # shellcheck disable=SC2086 # CMAKE_ARGS is a list
 cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DKRAKEN_SANITIZE=OFF -DKRAKEN_TESTS=OFF ${CMAKE_ARGS:-}
 cmake --build "$BUILD" -j"${JOBS:-$(nproc)}" --target "$NAME"
+# From the git tag, see the top-level CMakeLists.txt.
+VERSION=$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' "$BUILD/CMakeCache.txt")
+test -n "$VERSION"
 
 STAGE="$BUILD/${NAME}_${VERSION}_${ARCH}"
 rm -rf "$STAGE" "$STAGE.deb"

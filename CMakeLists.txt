@@ -1,6 +1,21 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(kraken_explorer VERSION 0.0.5 LANGUAGES C CXX)
+# The version is the newest release tag (x.y.z) reachable from HEAD; CI checks out with full
+# history so it finds it. Without git or tags: 0.0.0. -DKRAKEN_VERSION=x.y.z overrides.
+# ponytail: read at configure time only, re-run cmake after tagging to pick up a new tag.
+if(NOT KRAKEN_VERSION)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*"
+                        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                        OUTPUT_VARIABLE KRAKEN_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    endif()
+    if(NOT KRAKEN_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+        set(KRAKEN_VERSION 0.0.0)
+    endif()
+endif()
+
+project(kraken_explorer VERSION ${KRAKEN_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

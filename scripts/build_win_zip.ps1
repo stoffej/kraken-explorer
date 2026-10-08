@@ -12,13 +12,16 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue" # Invoke-WebRequest is 10x slower with the progress bar
 $Src = Split-Path $PSScriptRoot -Parent
 $Name = "kraken-explorer"
-if ((Get-Content "$Src\CMakeLists.txt" -Raw) -notmatch 'project\(kraken_explorer VERSION ([0-9.]+)') { throw "no version in CMakeLists.txt" }
+if (-not $PackageOnly) {
+cmake -S $Src -B $Build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKRAKEN_TESTS=OFF @(-split $env:CMAKE_ARGS)
+if ($LASTEXITCODE) { throw "configure failed" }
+}
+# From the git tag, see the top-level CMakeLists.txt.
+if ((Get-Content "$Build\CMakeCache.txt" -Raw) -notmatch 'CMAKE_PROJECT_VERSION:STATIC=([0-9.]+)') { throw "no version in $Build\CMakeCache.txt" }
 $Version = $Matches[1]
 
 $Stage = "$Build\$Name-$Version-win64"
 if (-not $PackageOnly) {
-cmake -S $Src -B $Build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKRAKEN_TESTS=OFF @(-split $env:CMAKE_ARGS)
-if ($LASTEXITCODE) { throw "configure failed" }
 cmake --build $Build --target $Name
 if ($LASTEXITCODE) { throw "build failed" }
 
