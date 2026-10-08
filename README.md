@@ -23,11 +23,45 @@ Release [0.0.5](https://github.com/stoffej/kraken-explorer/releases/tag/0.0.5)
 | Windows installer | [kraken-explorer-0.0.5-win64-setup.exe](https://github.com/stoffej/kraken-explorer/releases/download/0.0.5/kraken-explorer-0.0.5-win64-setup.exe) |
 | Windows portable | [kraken-explorer-0.0.5-win64.zip](https://github.com/stoffej/kraken-explorer/releases/download/0.0.5/kraken-explorer-0.0.5-win64.zip) |
 
+### Linux installation
+
+Choose **one** of these alternatives:
+
+**Method A — Ubuntu / Debian installer**
+
+Downloads and installs the latest `.deb`, including the icon, menu entry and SocketCAN polkit
+rule, and adds you to `netdev`. Log out and back in if prompted.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh   # Ubuntu / Debian: latest .deb + netdev group
-sudo apt install ./kraken-explorer_0.0.5_amd64.deb   # or by hand; icon, menu entry and SocketCAN polkit rule included
-chmod +x Kraken_Explorer-0.0.5-x86_64.AppImage && ./Kraken_Explorer-0.0.5-x86_64.AppImage
+curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh
 ```
+
+**Method B — Manual `.deb` installation (Ubuntu / Debian)**
+
+Download the `kraken-explorer_*_amd64.deb` asset from the
+[latest release](https://github.com/stoffej/kraken-explorer/releases/latest).
+In the folder containing the download, with only one matching `.deb`, run:
+
+```bash
+sudo apt install ./kraken-explorer_*_amd64.deb
+```
+
+Both `.deb` methods install `kraken-explorer`, which you can launch from the application menu
+or your terminal.
+
+**Method C — AppImage (Linux, no installation)**
+
+Download the `Kraken_Explorer-*-x86_64.AppImage` asset from the
+[latest release](https://github.com/stoffej/kraken-explorer/releases/latest).
+In the folder containing the download, with only one matching AppImage, run:
+
+```bash
+chmod +x ./Kraken_Explorer-*-x86_64.AppImage
+./Kraken_Explorer-*-x86_64.AppImage
+```
+
+These commands have no inline comments. If you paste other commands containing `#` comments
+into zsh, enable them with `setopt INTERACTIVE_COMMENTS` or use commands without comments.
 
 ### Code signing policy
 
@@ -49,11 +83,16 @@ One-liner (installs build dependencies, builds a `.deb` and installs it):
 git clone https://github.com/stoffej/kraken-explorer && cd kraken-explorer && scripts/install.sh
 ```
 
-By hand:
+By hand, build and run in place:
 
 ```bash
 cmake -S . -B build -G Ninja && cmake --build build --target kraken-explorer
-build/src/kraken-explorer                       # run in place, or:
+build/src/kraken-explorer
+```
+
+Or, after building, create and install a `.deb`:
+
+```bash
 scripts/build_deb.sh && sudo dpkg -i build/deb/kraken-explorer_*.deb
 ```
 
