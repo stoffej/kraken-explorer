@@ -47,9 +47,10 @@ warns on first run. Release builds from CI are, see "Code signing".
 With Inno Setup 6.3+ installed (`winget install JRSoftware.InnoSetup`) the script also builds
 `kraken-explorer-<version>-win64-setup.exe` from `packaging/windows/kraken-explorer.iss`: the same
 files as one installer, per user, with a Start menu entry and an uninstall entry in Windows' app
-list. CI builds both; pushing a tag like `0.0.3` (which also sets the version, see `CMakeLists.txt`) attaches the
-zip, the setup.exe, the .deb and the AppImage to a draft release, which is published by hand on
-the releases page.
+list. CI builds both; pushing a tag like `0.0.3` (which also sets the version, see `CMakeLists.txt`)
+attaches the zip, the setup.exe, the .deb and the AppImage to the release and publishes it once
+every package is uploaded. A manual run on a tag does the same; a manual run on a branch only
+refreshes the packages and leaves a draft release unpublished.
 
 ## Code signing
 
