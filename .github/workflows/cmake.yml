@@ -4,7 +4,7 @@ on:
   workflow_dispatch:  # enables manual trigger
     inputs:
       draft_release:
-        description: Create (or refresh) the draft release <version> from this run's packages
+        description: Create (or refresh) the release <version> from this run's packages; published when run on a tag, kept as a draft when run on a branch
         type: boolean
         default: false
   push:
@@ -314,7 +314,7 @@ jobs:
         if-no-files-found: error
 
   release:
-    name: Draft release
+    name: Release
     if: github.ref_type == 'tag' || inputs.draft_release
     needs: [unit-tests, format-compat, package, windows]
     runs-on: ubuntu-24.04
@@ -334,19 +334,32 @@ jobs:
         pattern: KrakenExplorer-*
         merge-multiple: true
 
-    # A new release is a draft, published by hand on the releases page (which also creates the
-    # tag when the run was started manually). An existing release for the tag, draft or
+    # A new release starts as a draft so every package is attached before it goes public
+    # (required once a release is immutable). An existing release for the tag, draft or
     # published, gets this run's packages.
-    - name: Create draft release
+    - name: Create or update release
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         # The version is the tag the packages were built from (top-level CMakeLists.txt).
         VERSION=$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*")
         TAG="$VERSION"
+        echo "TAG=$TAG" >> "$GITHUB_ENV"
         ls -la dist
         if gh release view "$TAG" >/dev/null 2>&1; then
           gh release upload "$TAG" dist/* --clobber
         else
           gh release create "$TAG" dist/* --draft --generate-notes --target "$GITHUB_SHA" --title "Kraken Explorer $VERSION"
+        fi
+
+    # Runs built from a tag (a tag push, or a manual run started on the tag) publish the
+    # release, including a draft left by an earlier run. A manual run from a branch only
+    # refreshes the packages: they were not built from the tag, so a draft stays a draft.
+    - name: Publish release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+          gh release edit "$TAG" --draft=false
         fi
