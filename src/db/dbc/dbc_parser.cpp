@@ -611,6 +611,18 @@ void recover_line(DbcCursor& cur)
     return ok;
 }
 
+// The message a CM_, VAL_ or SIG_VALTYPE_ line names. Some tools write an extended id there as the
+// bare 29-bit id, without the bit 31 its BO_ carries; cantools reads those files too.
+CanDbMessage* find_referenced_message(CanDb& db, long long id)
+{
+    CanDbMessage* msg = can_db_find_message(db, static_cast<uint32_t>(id));
+    if (msg == nullptr && id >= 0 && id <= 0x1FFFFFFF)
+    {
+        msg = can_db_find_message(db, static_cast<uint32_t>(id) | 0x80000000u);
+    }
+    return msg;
+}
+
 [[nodiscard]] bool parse_cm(DbcCursor& cur, CanDb& db)
 {
     std::string s;
@@ -633,7 +645,7 @@ void recover_line(DbcCursor& cur)
     if (kind == "BO_")
     {
         if (!need_value(cur, ll, "message id") || !need_string(cur, s, "comment")) { return false; }
-        CanDbMessage* msg = can_db_find_message(db, static_cast<uint32_t>(ll));
+        CanDbMessage* msg = find_referenced_message(db, ll);
         if (!msg) { return fail(cur, std::format("unknown message {}", ll)); }
         msg->comment = s;
         return need_section_ending(cur);
@@ -642,7 +654,7 @@ void recover_line(DbcCursor& cur)
     {
         if (!need_value(cur, ll, "message id")) { return false; }
         if (!need_identifier(cur, id, "signal name")) { return false; }
-        CanDbMessage* msg = can_db_find_message(db, static_cast<uint32_t>(ll));
+        CanDbMessage* msg = find_referenced_message(db, ll);
         if (!msg) { return fail(cur, std::format("unknown message {}", ll)); }
         CanDbSignal* sig = can_db_find_signal(*msg, id);
         if (!sig) { return fail(cur, std::format("unknown signal {} of message {}", id, msg->name)); }
@@ -660,17 +672,24 @@ void recover_line(DbcCursor& cur)
     if (!need_value(cur, can_id, "message id")) { return false; }
     cur.stmt += " " + std::to_string(can_id);
     if (!need_identifier(cur, signal_name, "signal name")) { return false; }
-    CanDbMessage* msg = can_db_find_message(db, static_cast<uint32_t>(can_id));
-    if (!msg) { return fail(cur, "unknown message"); }
-    CanDbSignal* sig = can_db_find_signal(*msg, signal_name);
-    if (!sig) { return fail(cur, std::format("unknown signal {} of message {}", signal_name, msg->name)); }
+    CanDbMessage* msg = find_referenced_message(db, can_id);
+    CanDbSignal* sig = msg ? can_db_find_signal(*msg, signal_name) : nullptr;
+    if (!sig)
+    {
+        // A value table left over from a signal that is gone: skipped, as SIG_VALTYPE_ and
+        // other DBC tools do, rather than refusing the whole file.
+        log_warning(std::format("dbc: VAL_ for unknown signal {} of message {}", signal_name, can_id));
+    }
 
     while (!skip(cur, tok::semicolon))
     {
         long long value = 0;
         std::string name;
         if (!need_value(cur, value, "value or ';'") || !need_string(cur, name, "value name")) { return false; }
-        sig->value_table[static_cast<uint64_t>(value)] = name;
+        if (sig)
+        {
+            sig->value_table[static_cast<uint64_t>(value)] = name;
+        }
     }
     return true;
 }
@@ -683,7 +702,7 @@ void recover_line(DbcCursor& cur)
     int type = 0;
     if (!need_value(cur, can_id, "message id") || !need_identifier(cur, signal_name, "signal name")) { return false; }
     if (!need(cur, tok::colon, "':'") || !need_value(cur, type, "value type")) { return false; }
-    CanDbMessage* msg = can_db_find_message(db, static_cast<uint32_t>(can_id));
+    CanDbMessage* msg = find_referenced_message(db, can_id);
     CanDbSignal* sig = msg ? can_db_find_signal(*msg, signal_name) : nullptr;
     if (!sig)
     {

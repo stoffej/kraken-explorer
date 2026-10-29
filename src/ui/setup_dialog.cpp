@@ -13,7 +13,7 @@
 #include "drivers/driver.h"
 #include "ui/theme.h"
 
-#ifndef _WIN32
+#ifdef __linux__
 #include <unistd.h>
 #endif
 
@@ -561,7 +561,7 @@ void draw_page(App& app, SetupDialogState& s)
 void setup_dialog_open(App& app, SetupDialogState& s)
 {
     s.work = app.setup;
-#ifndef _WIN32 // no SocketCAN there
+#ifdef __linux__ // SocketCAN only there
     // Without root SocketCAN interfaces default to "configured by OS", as in the Qt build.
     if (geteuid() != 0)
     {

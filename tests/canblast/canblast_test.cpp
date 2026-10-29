@@ -148,8 +148,12 @@ TEST_CASE("canblast: discovery, heartbeat and frames")
     CHECK(std::string(hbuf.data(), static_cast<std::size_t>(hn)) == "Heartbeat");
     net_close(hb);
 
+    // The garbage datagram can still be queued behind the two frames: read until it is counted.
     IfaceStats st;
-    canblast_driver.stats(iface, st);
+    for (int tries = 0; tries < 20 && (canblast_driver.stats(iface, st), st.rx_errors == 0); ++tries)
+    {
+        REQUIRE(canblast_driver.read(iface, buf.data(), 16, 100) >= 0);
+    }
     CHECK(st.rx_frames == 2);
     CHECK(st.rx_errors == 1);
     CHECK_FALSE(canblast_driver.send(iface, BusMessage{}));

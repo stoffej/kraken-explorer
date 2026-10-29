@@ -227,6 +227,7 @@ void draw_macro(App& app, Macros& macros, Macro& m)
 void macro_run(std::stop_token stop, std::vector<MacroStep> steps, std::deque<Iface>& ifaces, Tasks& tasks,
                std::shared_ptr<std::atomic<bool>> running)
 {
+    platform_fine_timers();
     std::mutex mutex;
     std::condition_variable_any cv; // only to sleep until the wait is over or the stop request
     for (const MacroStep& step : steps)
@@ -279,7 +280,6 @@ bool macro_start(App& app, Macro& m)
         return false;
     }
     *m.running = true;
-    platform_fine_timers();
     m.worker = std::jthread(macro_run, m.steps, std::ref(app.ifaces), std::ref(app.tasks), m.running);
     return true;
 }

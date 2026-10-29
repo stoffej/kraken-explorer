@@ -99,12 +99,16 @@ TEST_CASE("cyclic sender keeps the interval, disables rows whose send fails, sto
         gen.rows.push_back({.msg = BusMessage{.id = 0x100, .iface = 0}, .interval_ms = 10});
         gen.rows.push_back({.msg = BusMessage{.id = 0x101, .iface = 7}, .interval_ms = 10}); // no such interface
         tx_generator_start(gen, ifaces);
+        const auto start = std::chrono::steady_clock::now();
         enable(gen, 0);
         enable(gen, 1);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         const int sent = fake_sent.load();
-        CHECK(sent >= 20); // 30 due; generous for ASan / loaded CI
-        CHECK(sent <= 32); // no bursts
+        // Against the time that really passed: a loaded CI (GitHub's macOS runner) oversleeps by
+        // 100 ms and more while the real-time sender keeps its interval.
+        const auto due = static_cast<int>((std::chrono::steady_clock::now() - start) / std::chrono::milliseconds(10));
+        CHECK(sent >= due / 2);     // a stalled sender, not a slow CI (Windows made 19 of 30)
+        CHECK(sent <= due + 2);     // the first frame goes out at once; no bursts
         {
             std::scoped_lock lock(gen.mutex);
             CHECK(gen.rows[0].enabled);
@@ -338,9 +342,13 @@ TEST_CASE("on-receive row is sent once per trigger by the sender thread")
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         CHECK(fake_sent.load() == before); // nothing armed, Manual never sent by the thread
         const BusMessage hit{.id = 0x100, .iface = 0};
+        const auto armed = std::chrono::steady_clock::now();
         tx_generator_on_rx(gen, std::span(&hit, 1));
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        CHECK(fake_sent.load() == before); // still within the delay
+        if (std::chrono::steady_clock::now() - armed < std::chrono::milliseconds(15)) // a loaded CI oversleeps past the delay
+        {
+            CHECK(fake_sent.load() == before); // still within the delay
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
         CHECK(fake_sent.load() == before + 1);
         {

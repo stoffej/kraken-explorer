@@ -19,8 +19,8 @@
 */
 
 // The parts of SocketCAN link control that only build command lines and classify results
-// (driver.h): portable, so the CAN Status window and its tests build everywhere. Windows has no
-// SocketCAN: there the calls that would run `ip` report failure and no link exists.
+// (driver.h): portable, so the CAN Status window and its tests build everywhere. Windows and macOS
+// have no SocketCAN: there the calls that would run `ip` report failure and no link exists.
 
 #include <filesystem>
 #include <format>
@@ -135,7 +135,7 @@ bool autobaud_hit(const BaudProbe& p) noexcept
     return p.frames >= 2 && p.errors == 0;
 }
 
-#ifdef _WIN32
+#ifndef __linux__
 IpResult socketcan_run_ip(const std::vector<std::string>&)
 {
     return IpResult::failed;

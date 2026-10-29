@@ -29,11 +29,22 @@
 
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <sys/sendfile.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>   // _NSGetExecutablePath
+#include <mach/mach.h>     // host_statistics64
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
+#include <pthread.h>       // pthread_mach_thread_np
+
+extern char** environ;
+#else
+#include <sys/sendfile.h>
+#endif
 
 namespace
 {
@@ -53,12 +64,26 @@ bool allocate(int fd, uint64_t from, uint64_t to)
     {
         return true;
     }
+#ifdef __APPLE__
+    // Reserve the blocks past the end of the file, then extend the file over them.
+    fstore_t store{.fst_flags = F_ALLOCATEALL, .fst_posmode = F_PEOFPOSMODE, .fst_offset = 0,
+                   .fst_length = static_cast<off_t>(to - from), .fst_bytesalloc = 0};
+    if (fcntl(fd, F_PREALLOCATE, &store) != 0 && errno == ENOSPC)
+    {
+        return false;
+    }
+#else
     if (fallocate(fd, 0, static_cast<off_t>(from), static_cast<off_t>(to - from)) == 0)
     {
         return true;
     }
+    if (errno != EOPNOTSUPP)
+    {
+        return false;
+    }
+#endif
     struct stat st{};
-    return errno == EOPNOTSUPP && fstat(fd, &st) == 0
+    return fstat(fd, &st) == 0
            && (static_cast<uint64_t>(st.st_size) >= to || ftruncate(fd, static_cast<off_t>(to)) == 0);
 }
 
@@ -100,7 +125,11 @@ bool file_resize(PlatformFile f, uint64_t size)
 
 PlatformFile file_ram()
 {
+#ifdef __APPLE__
+    return platform_no_file; // no memfd; the unified buffer cache keeps a fresh file in RAM anyway
+#else
     return memfd_create("kraken-frame-cache", MFD_CLOEXEC);
+#endif
 }
 
 PlatformFile file_dup(PlatformFile f)
@@ -112,9 +141,20 @@ bool file_copy_to(PlatformFile in, uint64_t size, const std::filesystem::path& o
 {
     const int out = open(out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     off_t off = 0;
+#ifdef __APPLE__ // no sendfile between files
+    std::vector<char> buf(1 << 20);
+    ssize_t n = 0;
+    while (out >= 0 && static_cast<uint64_t>(off) < size
+           && (n = pread(fd_of(in), buf.data(), std::min<uint64_t>(buf.size(), size - static_cast<uint64_t>(off)), off)) > 0
+           && write(out, buf.data(), static_cast<std::size_t>(n)) == n)
+    {
+        off += n;
+    }
+#else
     while (out >= 0 && static_cast<uint64_t>(off) < size && sendfile(out, fd_of(in), &off, size - static_cast<uint64_t>(off)) > 0)
     {
     }
+#endif
     return out >= 0 && close(out) == 0 && static_cast<uint64_t>(off) == size;
 }
 
@@ -191,7 +231,12 @@ bool mem_prefetch(PlatformFile f, void* map, uint64_t off, std::size_t size)
     thread_local std::vector<unsigned char> resident;
     thread_local std::vector<char> sink;
     resident.resize((size + page - 1) / page);
-    const bool cached = mincore(static_cast<char*>(map) + off, size, resident.data()) == 0
+#ifdef __APPLE__
+    char* const vec = reinterpret_cast<char*>(resident.data()); // char* there, unsigned char* on Linux
+#else
+    unsigned char* const vec = resident.data();
+#endif
+    const bool cached = mincore(static_cast<char*>(map) + off, size, vec) == 0
                         && std::ranges::all_of(resident, [](unsigned char r) { return (r & 1) != 0; });
     if (cached)
     {
@@ -202,9 +247,19 @@ bool mem_prefetch(PlatformFile f, void* map, uint64_t off, std::size_t size)
 }
 
 // MemAvailable: free RAM plus the page cache the kernel can drop (sysconf's free pages leave the
-// cache out, and after reading a big log nearly all RAM is cache).
+// cache out, and after reading a big log nearly all RAM is cache). macOS: free, inactive and
+// purgeable pages.
 uint64_t platform_available_ram()
 {
+#ifdef __APPLE__
+    vm_statistics64_data_t vm{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&vm), &count) != KERN_SUCCESS)
+    {
+        return 0;
+    }
+    return (uint64_t{vm.free_count} + vm.inactive_count + vm.purgeable_count) * vm_page_size;
+#else
     std::ifstream in("/proc/meminfo");
     std::string key;
     uint64_t kb = 0;
@@ -213,6 +268,7 @@ uint64_t platform_available_ram()
         in.ignore(64, '\n');
     }
     return key == "MemAvailable:" ? kb * 1024 : 0;
+#endif
 }
 
 int platform_pid()
@@ -222,6 +278,18 @@ int platform_pid()
 
 void platform_fine_timers()
 {
+#ifdef __APPLE__
+    // XNU coalesces a thread's timers by its class: a background process (one launchd started, as a
+    // CI runner is) gets up to 4x the wait, 100 ms at most, so a 10 ms cycle ran at ~37 ms. A
+    // real-time thread gets no leeway, so the pacing thread asks for that policy for itself.
+    mach_timebase_info_data_t tb{};
+    mach_timebase_info(&tb);
+    const auto ticks = [&](uint64_t ns) { return static_cast<uint32_t>(ns * tb.denom / tb.numer); };
+    thread_time_constraint_policy_data_t policy{.period = ticks(1'000'000), .computation = ticks(100'000),
+                                                .constraint = ticks(500'000), .preemptible = TRUE};
+    thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                      reinterpret_cast<thread_policy_t>(&policy), THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+#endif
 }
 
 std::filesystem::path platform_home_dir()
@@ -236,7 +304,11 @@ std::filesystem::path platform_config_dir()
         return xdg;
     }
     const std::filesystem::path home = platform_home_dir();
+#ifdef __APPLE__
+    return home.empty() ? home : home / "Library/Application Support";
+#else
     return home.empty() ? home : home / ".config";
+#endif
 }
 
 std::filesystem::path platform_cache_dir()
@@ -246,7 +318,11 @@ std::filesystem::path platform_cache_dir()
         return xdg;
     }
     const std::filesystem::path home = platform_home_dir();
+#ifdef __APPLE__
+    return home.empty() ? home : home / "Library/Caches";
+#else
     return home.empty() ? home : home / ".cache";
+#endif
 }
 
 std::vector<std::filesystem::path> platform_roots()
@@ -257,7 +333,20 @@ std::vector<std::filesystem::path> platform_roots()
 std::filesystem::path platform_exe_path()
 {
     std::error_code ec;
+#ifdef __APPLE__
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size); // asks for the size
+    std::string path(size, '\0');
+    if (_NSGetExecutablePath(path.data(), &size) != 0)
+    {
+        return {};
+    }
+    path.resize(path.find('\0'));
+    const std::filesystem::path exe = std::filesystem::canonical(path, ec);
+    return ec ? std::filesystem::path{} : exe;
+#else
     return std::filesystem::read_symlink("/proc/self/exe", ec);
+#endif
 }
 
 namespace

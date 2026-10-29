@@ -19,6 +19,8 @@
 
 #include "db/dbf/dbf.h"
 
+#include "core/charconv.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -83,7 +85,16 @@ bool number(std::string_view s, T& v)
     {
         s.remove_prefix(1);
     }
-    const auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
+    std::from_chars_result r{};
+    if constexpr (std::is_floating_point_v<T>)
+    {
+        r = float_from_chars(s.data(), s.data() + s.size(), v);
+    }
+    else
+    {
+        r = std::from_chars(s.data(), s.data() + s.size(), v);
+    }
+    const auto [p, ec] = r;
     return ec == std::errc{} && p == s.data() + s.size();
 }
 

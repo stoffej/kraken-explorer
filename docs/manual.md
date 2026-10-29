@@ -2,7 +2,7 @@
 # <img src="../packaging/kraken-explorer.png" width="48" height="48"> Kraken Explorer: Day of the N2K Tentacle
 _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 
-**Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux 🐧 and Windows**
+**Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux 🐧, Windows and macOS 🍎**
 
 **vs PCAN-Explorer:** the everyday PCAN-Explorer workflow (`.sym` symbol files, instrument panels, signal-based and triggered transmit, XY plots, cycle-time statistics), free, on Linux, with the adapters below.
 
@@ -11,7 +11,7 @@ _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 | Interface | Notes |
 | :--- | :--- |
 | **SocketCAN** | Any kernel CAN interface (`can0`, `vcan0`, …) |
-| **PEAK PCAN** | PCAN-USB, PCAN-USB Pro, PCAN-PCIe, … through SocketCAN (`peak_usb` / `peak_pci` kernel drivers) on Linux; on Windows through PCAN-Basic (`PCANBasic.dll` of the PEAK driver package; CAN FD on FD adapters, not yet tested on hardware) |
+| **PEAK PCAN** | PCAN-USB, PCAN-USB Pro, PCAN-PCIe, … through SocketCAN (`peak_usb` / `peak_pci` kernel drivers) on Linux; on Windows through PCAN-Basic (`PCANBasic.dll` of the PEAK driver package), on macOS through MacCAN's PCBUSB (`libPCBUSB.dylib`); CAN FD on FD adapters, not yet tested on hardware |
 | **Kvaser** | Leaf, USBcan and other Kvaser devices: natively through CANlib when linuxcan is installed (CAN FD included), or as SocketCAN through the kernel's `kvaser_usb` driver |
 | **Candlelight / CANable / CANnectivity** | gs_usb devices (CANable with Candlelight firmware, MKS CANable, cantact, CANnectivity, …). Via SocketCAN (`gs_usb` kernel driver) |
 | **SLCAN** | CANable (SLCAN firmware), WeAct, Arduino CAN shields |
@@ -42,8 +42,8 @@ _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 *   **Large Logs**: A loaded log is parsed once into a frame cache (`$XDG_CACHE_HOME/kraken-explorer/*.kfc`, rebuilt when the file's content changes, the least recently opened caches are dropped once the directory exceeds 32 GB) and mapped, so multi-GB logs open instantly afterwards. The whole file shows in the trace: jump with the Log's position slider or "Go to" time, the graph decodes only the visible time window. See [Large logs and the frame cache](#large-logs-and-the-frame-cache).
 *   **Trace file view**: With a loaded file the Log shows the whole file, however big: a row-linear position slider ("row 182 764 569 at 1:02:03.500"), a **Go to** field taking a time since the first frame (`90`, `1:30`, `1:02:03.5`, `2d 1:02:03`; Enter jumps), the mouse wheel and the vim keys (`j`/`k`, `gg`/`G`, Ctrl+d/u/f/b). The filter runs over the file's per-id index, the Index column groups thousands (`182 764 569`).
 *   **Export Formats**: Save traces as Vector ASC or BLF, Vector MDF4, Linux candump, PEAK TRC, PCAP or PCAPng (Wireshark-compatible).
-*   **SocketCAN link control**: The CAN Status view brings interfaces Up / Down (physical CAN with the bitrate from the setup), creates and deletes `vcan` interfaces, and **Auto-baud** scans a physical interface listen-only (1 Mbit/s down to 10 kbit/s), brings it up active at the bitrate it finds and stores that in the setup. The same button on a PEAK (Windows) or Kvaser channel probes the adapter's bitrates through its driver. The scan is listen-only on Linux and Windows: nothing is sent or acknowledged, so a wrong bitrate cannot disturb the bus, and an adapter without a listen-only mode is not probed. Only when traffic is readable at a rate is that rate stored and the interface set to active mode. The **Active** / **Passive** button next to it switches an interface between normal operation and listen-only (the same option as "Bus Monitoring Mode" in the setup); it takes effect at the next measurement start, a SocketCAN link that is up is restarted in the new mode at once.
-*   **Updates**: At start and once a day Kraken Explorer asks GitHub for the latest release (through the `curl` program; Linux, and Windows 10 and later have it). Left of the connection pill the menu bar then shows **Up to date**, or **Update x.y.z** in brass when a newer release is out; a click opens the update window (on "Up to date" it checks again). The **AppImage** updates itself: **Update now** downloads the new AppImage next to the running one and replaces it (a file named after its version gets the new version's name), **Restart now** starts it. An **installed Windows** build downloads the new setup.exe; **Install and restart** closes the app, installs silently and starts the new version. The .deb and the Windows zip get a link to the release page. Settings > Updates > *Check for updates* turns the checks off (`KRAKEN_UPDATE_CHECK=0` too); nothing but the request for the latest release is sent.
+*   **SocketCAN link control**: The CAN Status view brings interfaces Up / Down (physical CAN with the bitrate from the setup), creates and deletes `vcan` interfaces, and **Auto-baud** scans a physical interface listen-only (1 Mbit/s down to 10 kbit/s), brings it up active at the bitrate it finds and stores that in the setup. The same button on a PEAK (Windows, macOS) or Kvaser channel probes the adapter's bitrates through its driver. The scan is listen-only on Linux and Windows: nothing is sent or acknowledged, so a wrong bitrate cannot disturb the bus, and an adapter without a listen-only mode is not probed. Only when traffic is readable at a rate is that rate stored and the interface set to active mode. The **Active** / **Passive** button next to it switches an interface between normal operation and listen-only (the same option as "Bus Monitoring Mode" in the setup); it takes effect at the next measurement start, a SocketCAN link that is up is restarted in the new mode at once.
+*   **Updates**: At start and once a day Kraken Explorer asks GitHub for the latest release (through the `curl` program; Linux, and Windows 10 and later have it). Left of the connection pill the menu bar then shows **Up to date**, or **Update x.y.z** in brass when a newer release is out; a click opens the update window (on "Up to date" it checks again). The **AppImage** updates itself: **Update now** downloads the new AppImage next to the running one and replaces it (a file named after its version gets the new version's name), **Restart now** starts it. An **installed Windows** build downloads the new setup.exe; **Install and restart** closes the app, installs silently and starts the new version. The .deb, the Windows zip and the macOS app get a link to the release page. Settings > Updates > *Check for updates* turns the checks off (`KRAKEN_UPDATE_CHECK=0` too); nothing but the request for the latest release is sent.
 *   **Workspace**: Dear ImGui interface with docking, floating windows on multiple monitors, workspace tabs, Light/Dark theme, adjustable text size (Settings, 100–175 %) and an in-app file picker. Uses no CPU while idle.
 
 <br>![Kraken Explorer Trace View](view.png)<br>
@@ -179,6 +179,34 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 > **Note:** Your user must be in the `plugdev` group (`sudo usermod -aG plugdev $USER`, then log out and back in).
 
+### 🍎 macOS
+
+Apple silicon. Xcode command line tools (`xcode-select --install`), [Homebrew](https://brew.sh)
+and Python 3.14 from the [python.org installer](https://www.python.org/downloads/macos/), whose
+framework the app embeds:
+
+```bash
+brew install cmake ninja pkg-config libusb pybind11
+export PKG_CONFIG_PATH=/Library/Frameworks/Python.framework/Versions/3.14/lib/pkgconfig
+cmake -S . -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Settings live in `~/Library/Application Support/kraken-explorer`, the log cache in
+`~/Library/Caches/kraken-explorer` (`$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME` win when set).
+`scripts/build_macos_app.sh && open build/macos/kraken-explorer-*.dmg` builds `Kraken
+Explorer.app` with its own Python and libusb and opens the DMG to drag it onto Applications. It is
+not notarized: allow the first start under **System Settings › Privacy & Security › Open Anyway**.
+
+There is no SocketCAN on macOS. PEAK adapters work through MacCAN's
+[PCBUSB library](https://mac-can.github.io/drivers/libPCBUSB.html) (its `install.sh` puts
+`libPCBUSB.dylib` in `/usr/local/lib`; restart Kraken Explorer), SLCAN and GrIP adapters on
+`/dev/cu.*`, CANblaster over UDP and the reference adapter's LIN (libusb). gs_usb adapters
+(candleLight, CANable) and the reference adapter's CAN channels are not supported on macOS yet.
+Shortcuts written as **Ctrl** are **Cmd** on macOS. Mac laptops ask "Allow accessory to connect?"
+for a new USB device: an adapter missing from the setup dialog often waits for that answer.
+
 ### Optional hardware drivers
 
 **Kvaser**: a Kvaser USB dongle works in two ways, no build option needed.
@@ -243,7 +271,7 @@ canconvert TCU.arxml TCU.dbc
 Download the latest release from the [Releases](https://github.com/stoffej/kraken-explorer/releases):
 the Linux AppImage (`curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh`
 installs it in `~/.local/bin` with a menu entry and the SocketCAN polkit rule), the `.deb`, the Windows
-installer or the portable zip. The AppImage and the Windows installer update themselves from the app
+installer or the portable zip, the macOS DMG. The AppImage and the Windows installer update themselves from the app
 (see **Updates** above).
 
 ## 📜 Credits

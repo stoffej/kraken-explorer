@@ -25,6 +25,7 @@
 #include <format>
 #include <iterator>
 
+#include "core/local_time.h"
 #include "core/socket_can.h"
 #include "core/text.h"
 
@@ -64,8 +65,7 @@ void append_asc_data(std::string& out, const BusMessage& m)
 void append_asc_header(std::string& out, std::chrono::system_clock::time_point start)
 {
     // Qt's "ddd MMM dd hh:mm:ss.zzz ap yyyy" in the C locale, local time.
-    const std::chrono::zoned_time local{ std::chrono::current_zone(),
-                                         std::chrono::floor<std::chrono::milliseconds>(start) };
+    const auto local = to_local_time(std::chrono::floor<std::chrono::milliseconds>(start));
     const bool pm = std::format("{:%p}", local) == "PM";
     const std::string dt = std::format("{:%a %b %d %I:%M:%S} {} {:%Y}", local, pm ? "pm" : "am", local);
     std::format_to(std::back_inserter(out),
@@ -132,6 +132,10 @@ void append_candump_line(std::string& out, const BusMessage& m, std::string_view
     // Integer seconds + microseconds: exact, unlike going through a double.
     auto it = std::format_to(std::back_inserter(out), "({}.{:06}) {}",
                              m.ts_ns / 1000000000, (m.ts_ns % 1000000000) / 1000, iface_name);
+    // Fields are separated by spaces: a name with spaces (the PEAK channel "PCAN-USB (USB1)") is
+    // written with underscores, or no candump reader, this one included, finds the frame.
+    std::replace_if(out.end() - static_cast<std::ptrdiff_t>(iface_name.size()), out.end(),
+                    [](char c) { return c == ' ' || c == '\t'; }, '_');
 
     if (is_error_frame(m))
     {

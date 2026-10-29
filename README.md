@@ -2,8 +2,8 @@
 
 _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 
-Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux and Windows. Dear ImGui GUI in a
-deep-sea dark theme, GPL-2.0, fork of [CANgaroo](https://github.com/Schildkroet/CANgaroo).
+Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux, Windows and macOS. Dear ImGui
+GUI in a deep-sea dark theme, GPL-2.0, fork of [CANgaroo](https://github.com/Schildkroet/CANgaroo).
 
 [![Kraken Explorer demo](docs/demo.gif)](docs/demo.mp4)
 
@@ -35,6 +35,11 @@ start `kraken-explorer.exe`) updates by hand. The binaries are not code-signed, 
 warns on first run: **More info → Run anyway**. Packages are built unmodified from this repository
 by [GitHub Actions](.github/workflows/cmake.yml); build from source if in doubt.
 
+**macOS** (Apple silicon) — open the `...-macos-arm64.dmg` and drag **Kraken Explorer** onto
+Applications; it updates by hand from the release page. The app is not notarized, so macOS refuses
+the first start: **System Settings › Privacy & Security › Open Anyway**. PEAK adapters need
+MacCAN's [PCBUSB library](https://mac-can.github.io/drivers/libPCBUSB.html).
+
 Privacy: the program transfers nothing to other networked systems unless you ask it to, except the
 update check (one request for the latest release to api.github.com; off with Settings > Updates or
 `KRAKEN_UPDATE_CHECK=0`); the REST API (`--api PORT`) listens on 127.0.0.1 and only when started
@@ -65,6 +70,13 @@ Running the binary without the `.deb`? SocketCAN link control needs the polkit r
 
 ```bash
 sudo cp packaging/10-kraken-explorer-socketcan.rules /usr/share/polkit-1/rules.d/ && sudo usermod -aG netdev $USER
+```
+
+On macOS (Xcode command line tools, [Homebrew](https://brew.sh) and Python 3.14 from
+[python.org](https://www.python.org/downloads/macos/)), build the `.app` and open its DMG:
+
+```bash
+brew install cmake ninja pkg-config libusb pybind11 && scripts/build_macos_app.sh && open build/macos/kraken-explorer-*.dmg
 ```
 
 Interfaces, features, dependencies and permissions: [docs/manual.md](docs/manual.md).

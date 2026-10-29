@@ -11,6 +11,7 @@
 #include <misc/cpp/imgui_stdlib.h>
 
 #include "core/fuzzy.h"
+#include "core/local_time.h"
 #include "core/log.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
@@ -22,8 +23,7 @@ namespace
 
 std::string time_text(std::chrono::system_clock::time_point t)
 {
-    const std::chrono::zoned_time local(std::chrono::current_zone(), std::chrono::floor<std::chrono::seconds>(t));
-    return std::format("{:%H:%M:%S}", local.get_local_time());
+    return std::format("{:%H:%M:%S}", to_local_time(std::chrono::floor<std::chrono::seconds>(t)));
 }
 
 LogFilterLevel filter_level(LogLevel level)

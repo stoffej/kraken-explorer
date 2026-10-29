@@ -17,8 +17,9 @@
   along with Kraken Explorer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// PEAK PCAN adapters on Windows through PCAN-Basic (PCANBasic.dll of the PEAK driver package),
-// loaded at run time like CANlib in kvaser.cpp: nothing of PEAK's is needed to build or package.
+// PEAK PCAN adapters on Windows through PCAN-Basic (PCANBasic.dll of the PEAK driver package), and
+// on macOS through MacCAN's libPCBUSB (PEAK's endorsed macOS library, same API), loaded at run
+// time like CANlib in kvaser.cpp: nothing of PEAK's is needed to build or package.
 // The declarations below are PCAN-Basic's public, stable API (PCANBasic.h), only what is used.
 // On Linux the kernel's peak_usb driver makes the same adapters SocketCAN interfaces.
 // A channel that reports FEATURE_FD_CAPABLE opens through CAN_InitializeFD and then speaks
@@ -41,8 +42,17 @@
 #include "core/log.h"
 #include "drivers/driver.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#define PCAN_API __stdcall
+#else
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/select.h>
+#include <unistd.h>
+#define PCAN_API
+#endif
 
 namespace
 {
@@ -58,6 +68,12 @@ constexpr PcanStatus pcan_queue_empty = 0x20;
 constexpr PcanStatus pcan_bus_passive = 0x40000;
 constexpr PcanStatus pcan_ill_handle = 0x1C00;   // mask: hardware, net or client handle invalid
 constexpr PcanStatus pcan_not_initialized = 0x4000000;
+#ifdef __APPLE__
+// libPCBUSB adds the bus state to the result of a read that did return a frame.
+constexpr PcanStatus pcan_read_bus_state = pcan_bus_light | pcan_bus_heavy | pcan_bus_off | pcan_bus_passive;
+#else
+constexpr PcanStatus pcan_read_bus_state = 0;
+#endif
 
 constexpr uint8_t pcan_receive_event = 0x03;
 constexpr uint8_t pcan_listen_only = 0x08;
@@ -100,17 +116,17 @@ struct PcanTimestamp // since Windows started
 
 struct PcanBasic
 {
-    PcanStatus (__stdcall *CAN_Initialize)(PcanHandle ch, uint16_t btr0btr1, uint8_t hw_type, uint32_t io_port, uint16_t interrupt);
-    PcanStatus (__stdcall *CAN_Uninitialize)(PcanHandle ch);
-    PcanStatus (__stdcall *CAN_Read)(PcanHandle ch, PcanMsg* msg, PcanTimestamp* ts);
-    PcanStatus (__stdcall *CAN_Write)(PcanHandle ch, PcanMsg* msg);
-    PcanStatus (__stdcall *CAN_GetStatus)(PcanHandle ch);
-    PcanStatus (__stdcall *CAN_GetValue)(PcanHandle ch, uint8_t parameter, void* buffer, uint32_t size);
-    PcanStatus (__stdcall *CAN_SetValue)(PcanHandle ch, uint8_t parameter, void* buffer, uint32_t size);
+    PcanStatus (PCAN_API *CAN_Initialize)(PcanHandle ch, uint16_t btr0btr1, uint8_t hw_type, uint32_t io_port, uint16_t interrupt);
+    PcanStatus (PCAN_API *CAN_Uninitialize)(PcanHandle ch);
+    PcanStatus (PCAN_API *CAN_Read)(PcanHandle ch, PcanMsg* msg, PcanTimestamp* ts);
+    PcanStatus (PCAN_API *CAN_Write)(PcanHandle ch, PcanMsg* msg);
+    PcanStatus (PCAN_API *CAN_GetStatus)(PcanHandle ch);
+    PcanStatus (PCAN_API *CAN_GetValue)(PcanHandle ch, uint8_t parameter, void* buffer, uint32_t size);
+    PcanStatus (PCAN_API *CAN_SetValue)(PcanHandle ch, uint8_t parameter, void* buffer, uint32_t size);
     // PCAN-Basic 4.0 (2014) and later; nullptr in an older DLL, which then has no FD channels.
-    PcanStatus (__stdcall *CAN_InitializeFD)(PcanHandle ch, char* bitrate);
-    PcanStatus (__stdcall *CAN_ReadFD)(PcanHandle ch, PcanMsgFd* msg, uint64_t* ts_us);
-    PcanStatus (__stdcall *CAN_WriteFD)(PcanHandle ch, PcanMsgFd* msg);
+    PcanStatus (PCAN_API *CAN_InitializeFD)(PcanHandle ch, char* bitrate);
+    PcanStatus (PCAN_API *CAN_ReadFD)(PcanHandle ch, PcanMsgFd* msg, uint64_t* ts_us);
+    PcanStatus (PCAN_API *CAN_WriteFD)(PcanHandle ch, PcanMsgFd* msg);
 };
 
 // nullptr when PCAN-Basic is not installed, which the driver reports as "no channels".
@@ -118,17 +134,35 @@ const PcanBasic* pcan_load()
 {
     static const PcanBasic* lib = []() -> const PcanBasic*
     {
+#ifdef _WIN32
         const HMODULE dll = LoadLibraryA("PCANBasic.dll");
         if (dll == nullptr)
         {
             log_info("PCAN: PCANBasic.dll not found, install the PEAK driver package (with PCAN-Basic) for PEAK adapters");
             return nullptr;
         }
+        const auto dlsym = [](HMODULE lib, const char* name) { return reinterpret_cast<void*>(GetProcAddress(lib, name)); };
+#else
+        // MacCAN's installer puts it in /usr/local/lib.
+        void* dll = nullptr;
+        for (const char* path : {"libPCBUSB.dylib", "/usr/local/lib/libPCBUSB.dylib", "/opt/homebrew/lib/libPCBUSB.dylib"})
+        {
+            if ((dll = dlopen(path, RTLD_NOW | RTLD_LOCAL)) != nullptr)
+            {
+                break;
+            }
+        }
+        if (dll == nullptr)
+        {
+            log_info("PCAN: libPCBUSB not found, install MacCAN's PCBUSB library (mac-can.github.io) for PEAK adapters");
+            return nullptr;
+        }
+#endif
         static PcanBasic t;
         bool ok = true;
         const auto load = [&](auto& fn, const char* name)
         {
-            fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(reinterpret_cast<void*>(GetProcAddress(dll, name)));
+            fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(dlsym(dll, name));
             ok = ok && fn != nullptr;
         };
         load(t.CAN_Initialize, "CAN_Initialize");
@@ -140,7 +174,7 @@ const PcanBasic* pcan_load()
         load(t.CAN_SetValue, "CAN_SetValue");
         if (!ok)
         {
-            log_error("PCAN: PCANBasic.dll is missing a function this build needs");
+            log_error("PCAN: the PCAN-Basic library is missing a function this build needs");
             return nullptr;
         }
         load(t.CAN_InitializeFD, "CAN_InitializeFD");
@@ -274,13 +308,99 @@ bool pcan_fd_timing(unsigned bitrate, unsigned sample_point, unsigned max_tseg1,
     return false;
 }
 
+// Wakes read(): set by PCAN-Basic when the receive queue gets a frame, and by send(). Windows
+// hands PCAN-Basic an auto-reset event; libPCBUSB instead gives out a descriptor that is readable
+// while frames are queued, and a pipe stands in for send()'s SetEvent.
+struct RxEvent
+{
+#ifdef _WIN32
+    HANDLE event = nullptr;
+#else
+    int queue = -1;              // libPCBUSB's, closed by CAN_Uninitialize
+    int wake[2] = {-1, -1};
+#endif
+};
+
+#ifdef _WIN32
+PcanStatus rx_event_open(RxEvent& e, const PcanBasic& pb, PcanHandle h)
+{
+    e.event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    return pb.CAN_SetValue(h, pcan_receive_event, &e.event, sizeof e.event);
+}
+
+void rx_event_close(RxEvent& e)
+{
+    CloseHandle(e.event);
+    e.event = nullptr;
+}
+
+void rx_event_set(RxEvent& e)
+{
+    SetEvent(e.event);
+}
+
+void rx_event_wait(RxEvent& e, int timeout_ms)
+{
+    WaitForSingleObject(e.event, static_cast<DWORD>(timeout_ms));
+}
+#else
+PcanStatus rx_event_open(RxEvent& e, const PcanBasic& pb, PcanHandle h)
+{
+    if (const PcanStatus st = pb.CAN_GetValue(h, pcan_receive_event, &e.queue, sizeof e.queue); st != pcan_ok)
+    {
+        return st;
+    }
+    if (pipe(e.wake) != 0 || e.queue >= FD_SETSIZE || e.wake[0] >= FD_SETSIZE) // select() cannot wait on higher descriptors
+    {
+        return pcan_ill_handle;
+    }
+    for (const int fd : e.wake)
+    {
+        fcntl(fd, F_SETFL, O_NONBLOCK);
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    return pcan_ok;
+}
+
+void rx_event_close(RxEvent& e)
+{
+    close(e.wake[0]);
+    close(e.wake[1]);
+    e = {};
+}
+
+void rx_event_set(RxEvent& e)
+{
+    const char c = 0;
+    (void)write(e.wake[1], &c, 1); // a full pipe is already set
+}
+
+void rx_event_wait(RxEvent& e, int timeout_ms)
+{
+    fd_set in;
+    FD_ZERO(&in);
+    FD_SET(e.queue, &in);
+    FD_SET(e.wake[0], &in);
+    timeval tv{.tv_sec = timeout_ms / 1000, .tv_usec = timeout_ms % 1000 * 1000};
+    if (select(std::max(e.queue, e.wake[0]) + 1, &in, nullptr, nullptr, &tv) > 0 && FD_ISSET(e.wake[0], &in))
+    {
+        char buf[64];
+        while (read(e.wake[0], buf, sizeof buf) > 0)
+        {
+        }
+    }
+}
+#endif
+
 struct Pcan
 {
     PcanHandle handle = 0;
     bool fd = false;             // opened with CAN_InitializeFD: CAN_ReadFD / CAN_WriteFD only
     uint32_t data_bitrate = 0;
-    HANDLE event = nullptr;      // set by PCAN-Basic when the receive queue gets a frame, and by send()
+    RxEvent event;
+    bool open = false;
     int64_t offset_ns = 0;       // host time - device time, taken at the first frame
+    int64_t opened_ns = 0;       // host time at open: a stale first frame may re-anchor offset_ns for a second
     uint32_t bitrate = 0;
 
     std::mutex tx_mutex;
@@ -382,14 +502,15 @@ bool pcan_open(Iface& iface, const IfaceConfig& config)
     p->fd = fd;
     p->bitrate = config.bitrate;
     p->data_bitrate = fd ? config.fd_bitrate : 0;
-    p->event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
-    if (const PcanStatus st = pb->CAN_SetValue(ch->handle, pcan_receive_event, &p->event, sizeof p->event); st != pcan_ok)
+    p->opened_ns = now_ns();
+    if (const PcanStatus st = rx_event_open(p->event, *pb, ch->handle); st != pcan_ok)
     {
         log_error(std::format("PCAN {}: receive event refused: 0x{:X}", name, st));
         pb->CAN_Uninitialize(ch->handle);
-        CloseHandle(p->event);
+        rx_event_close(p->event);
         return false;
     }
+    p->open = true;
     iface_set_impl(iface, std::move(p));
     return true;
 }
@@ -397,11 +518,11 @@ bool pcan_open(Iface& iface, const IfaceConfig& config)
 void pcan_close(Iface& iface)
 {
     const PcanBasic* pb = pcan_load();
-    if (auto* p = static_cast<Pcan*>(iface.impl.get()); pb != nullptr && p != nullptr && p->event != nullptr)
+    if (auto* p = static_cast<Pcan*>(iface.impl.get()); pb != nullptr && p != nullptr && p->open)
     {
         pb->CAN_Uninitialize(p->handle);
-        CloseHandle(p->event);
-        p->event = nullptr;
+        rx_event_close(p->event);
+        p->open = false;
     }
 }
 
@@ -442,7 +563,7 @@ bool pcan_send(Iface& iface, const BusMessage& msg)
         std::lock_guard lock(p.tx_mutex);
         p.tx_done.push_back(tx);
     }
-    SetEvent(p.event); // read() reports it now, not after its timeout
+    rx_event_set(p.event); // read() reports it now, not after its timeout
     return true;
 }
 
@@ -450,7 +571,7 @@ int pcan_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
 {
     const PcanBasic& pb = *pcan_load();
     auto& p = iface_impl<Pcan>(iface);
-    WaitForSingleObject(p.event, static_cast<DWORD>(timeout_ms));
+    rx_event_wait(p.event, timeout_ms);
     int n = 0;
     {
         std::lock_guard lock(p.tx_mutex);
@@ -485,7 +606,7 @@ int pcan_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
             log_error(std::format("PCAN {}: CAN_Read failed: 0x{:X}", iface.info.name, st));
             return n > 0 ? n : -1;
         }
-        if (st != pcan_ok) // queue empty, or a bus state: stats() reports that
+        if ((st & ~pcan_read_bus_state) != pcan_ok) // queue empty, or a bus state: stats() reports that
         {
             break;
         }
@@ -498,11 +619,16 @@ int pcan_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
             ++p.rx_errors;
             continue;
         }
-        if (p.offset_ns == 0)
+        // ponytail: the first frame's delivery delay (about 1 ms) becomes a constant offset;
+        // QueryPerformanceCounter against the device clock at open if it matters. A first frame
+        // left over from before the open (libPCBUSB hands one over at times) sets it too far back:
+        // within the first second a frame that arrives sooner than that allows takes over. Only
+        // then: later the device clock's drift would re-anchor and step every timestamp back.
+        const int64_t now = now_ns();
+        if (const int64_t offset = now - device_ns;
+            p.offset_ns == 0 || (now - p.opened_ns < 1'000'000'000 && offset < p.offset_ns - 100'000'000))
         {
-            // ponytail: the first frame's delivery delay (about 1 ms) becomes a constant offset;
-            // QueryPerformanceCounter against the device clock at open if it matters.
-            p.offset_ns = now_ns() - device_ns;
+            p.offset_ns = offset;
         }
         BusMessage& m = out[n++];
         m = BusMessage{.id = msg.id & can_id_mask_extended, .iface = iface.index};
@@ -526,7 +652,7 @@ int pcan_read(Iface& iface, BusMessage* out, int max, int timeout_ms)
     }
     if (n == max)
     {
-        SetEvent(p.event); // more may be queued: the event is only set when the queue goes non-empty
+        rx_event_set(p.event); // more may be queued: the event is only set when the queue goes non-empty
     }
     return n;
 }

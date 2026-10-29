@@ -33,7 +33,8 @@ bool serial_write(SerialPort &port, const void *data, size_t size);
 // Returns bytes read, 0 on timeout, -1 on error (e.g. device unplugged).
 [[nodiscard]] long serial_read(SerialPort &port, void *data, size_t size, std::chrono::milliseconds timeout);
 
-// Drops unread input and unsent output.
+// Drops unread input (stale replies). Written output is left alone: on macOS it can still be
+// queued when this runs, a pty's until the other end reads it.
 void serial_clear(SerialPort &port) noexcept;
 
 [[nodiscard]] std::vector<SerialPortInfo> serial_list_ports();

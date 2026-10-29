@@ -24,6 +24,12 @@ env:
     libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
     libwayland-dev libxkbcommon-dev wayland-protocols
   HEADLESS: -DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF
+  # Compiler cache: ccache on Linux and macOS (actions/cache, see &ccache), sccache with the
+  # Actions cache backend on Windows. A clean build of this tree takes 12-17 minutes.
+  CCACHE_ARGS: -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+  SCCACHE_ARGS: -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+  CCACHE_COMPILERCHECK: content  # runners reinstall the compiler: its mtime would miss every time
+  CCACHE_MAXSIZE: 2G
 
 jobs:
   unit-tests:
@@ -37,7 +43,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ${{ env.BUILD_DEPS }} ${{ env.GUI_DEPS }}
+        sudo apt-get install -y ${{ env.BUILD_DEPS }} ${{ env.GUI_DEPS }} ccache
 
     # FetchContent downloads (imgui, glfw, ...). Only sources and download stamps
     # are cached; *-build dirs are rebuilt with this run's flags.
@@ -49,6 +55,19 @@ jobs:
           build/_deps
           !build/_deps/*-build
         key: fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/deps.cmake') }}
+
+    # One cache per OS and job (the flags differ), restored from the newest one of that job and
+    # saved by &ccache_save at the end of the job even when a test failed: actions/cache alone
+    # would drop a failed run's objects, and a failing run is exactly when the next push comes.
+    - &ccache
+      name: Restore compiler cache (ccache)
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ~/.cache/ccache
+          ~/Library/Caches/ccache
+        key: ccache-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+        restore-keys: ccache-${{ runner.os }}-${{ github.job }}-
 
     # Tests that need vcan0/vcan1 skip themselves when these are missing, and the
     # vcan module is not guaranteed to exist for the runner's kernel.
@@ -66,13 +85,23 @@ jobs:
         ip -brief link show type vcan
 
     - name: Configure
-      run: cmake -S . -B build -G Ninja -DKRAKEN_SANITIZE=ON
+      run: cmake -S . -B build -G Ninja -DKRAKEN_SANITIZE=ON ${{ env.CCACHE_ARGS }}
 
     - name: Build
-      run: cmake --build build
+      run: cmake --build build && ccache -s
 
     - name: Run tests
       run: ctest --test-dir build --output-on-failure
+
+    - &ccache_save
+      name: Save compiler cache (ccache)
+      if: always()
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          ~/.cache/ccache
+          ~/Library/Caches/ccache
+        key: ccache-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
   format-compat:
     name: Trace format compatibility (python-can, scapy, asammdf)
@@ -85,9 +114,10 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ${{ env.BUILD_DEPS }} python3-venv
+        sudo apt-get install -y ${{ env.BUILD_DEPS }} python3-venv ccache
 
     - *fetch_cache
+    - *ccache
 
     - name: Install reference readers
       run: |
@@ -96,7 +126,7 @@ jobs:
 
     - name: Build sample writer
       run: |
-        cmake -S . -B build -G Ninja ${{ env.HEADLESS }}
+        cmake -S . -B build -G Ninja ${{ env.HEADLESS }} ${{ env.CCACHE_ARGS }}
         cmake --build build --target trace_format_samples
 
     - name: Write samples and read them back
@@ -105,6 +135,8 @@ jobs:
         # share no code with Kraken Explorer. See tests/format_compat/validate.py.
         build/tests/format_compat/trace_format_samples build/format_compat
         .venv/bin/python tests/format_compat/validate.py build/format_compat
+
+    - *ccache_save
 
   package:
     name: Build Kraken Explorer DEB + AppImage
@@ -119,17 +151,22 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ${{ env.BUILD_DEPS }} ${{ env.GUI_DEPS }} wget fuse libfuse2
+        sudo apt-get install -y ${{ env.BUILD_DEPS }} ${{ env.GUI_DEPS }} wget fuse libfuse2 ccache
 
     - *fetch_cache
+    - *ccache
 
     - name: Build DEB package
       env:
         DEB_MAINTAINER: Kristoffer Johansson <https://github.com/stoffej>
+        CMAKE_ARGS: ${{ env.CCACHE_ARGS }}
       run: |
         # The Kvaser driver loads libcanlib at run time: nothing to install or bundle here.
         scripts/build_deb.sh build
+        ccache -s
         dpkg-deb --info build/*.deb
+
+    - *ccache_save
 
     - name: Read version
       run: |
@@ -211,6 +248,9 @@ jobs:
       with:
         python-version: "3.12"
 
+    - name: Set up sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+
     - name: Set up MinGW-w64 (MSYS2 UCRT64)
       id: msys2
       uses: msys2/setup-msys2@v2
@@ -231,15 +271,19 @@ jobs:
       shell: pwsh
       env:
         # Tests on: the same build tree runs ctest below.
-        CMAKE_ARGS: -DKRAKEN_TESTS=ON -DPython_ROOT_DIR=${{ env.pythonLocation }} -DPython_FIND_STRATEGY=LOCATION -DPython_FIND_REGISTRY=NEVER
+        CMAKE_ARGS: -DKRAKEN_TESTS=ON -DPython_ROOT_DIR=${{ env.pythonLocation }} -DPython_FIND_STRATEGY=LOCATION -DPython_FIND_REGISTRY=NEVER ${{ env.SCCACHE_ARGS }}
+        SCCACHE_GHA_ENABLED: "true"
       run: |
         $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
         g++ --version
         scripts\build_win_zip.ps1 -Build build
         if (-not (Test-Path build\kraken-explorer-*-win64-setup.exe)) { throw "no setup.exe built" }
+        sccache --show-stats
 
     - name: Build and run tests
       shell: pwsh
+      env:
+        SCCACHE_GHA_ENABLED: "true"
       run: |
         $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
         cmake --build build
@@ -258,10 +302,75 @@ jobs:
         path: "build/kraken-explorer-*-win64-setup.exe"
         if-no-files-found: error
 
+  macos:
+    name: macOS (doctest, ASan + UBSan; .app + DMG)
+    runs-on: macos-26
+
+    env:
+      # python.org framework build: embedded by the app and bundled into the .app by
+      # scripts/build_macos_app.sh (Homebrew's Python links OpenSSL & co. outside the framework).
+      PYTHON_PKG: https://www.python.org/ftp/python/3.14.8/python-3.14.8-macos11.pkg
+      PYTHON_FRAMEWORK: /Library/Frameworks/Python.framework/Versions/3.14
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0  # git describe: the version is the newest tag
+
+    - name: Install dependencies
+      run: |
+        brew install cmake ninja pkg-config libusb pybind11 ccache
+        curl -fsSL -o python.pkg "$PYTHON_PKG"
+        sudo installer -pkg python.pkg -target /
+        echo "PKG_CONFIG_PATH=$PYTHON_FRAMEWORK/lib/pkgconfig" >> "$GITHUB_ENV"
+
+    - *fetch_cache
+    - *ccache
+
+    # No vcan on macOS: the SocketCAN tests are compiled out, the rest runs as on Linux.
+    - name: Configure
+      run: cmake -S . -B build -G Ninja -DKRAKEN_SANITIZE=ON -DPython_ROOT_DIR="$PYTHON_FRAMEWORK" ${{ env.CCACHE_ARGS }}
+
+    - name: Build
+      run: cmake --build build && ccache -s
+
+    - name: Run tests
+      run: ctest --test-dir build --output-on-failure
+
+    # Homebrew's libusb is built for this runner's macOS only and would raise the bundle's
+    # LSMinimumSystemVersion to it (26.0): the bundle ships one built for the deployment target.
+    - name: libusb for the deployment target
+      run: |
+        curl -fsSL -o libusb.tar.bz2 https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
+        mkdir libusb-src && tar -xjf libusb.tar.bz2 -C libusb-src --strip-components 1
+        cd libusb-src
+        export MACOSX_DEPLOYMENT_TARGET=13.3 # read by clang at compile and link time, so for make too
+        ./configure --prefix="$PWD/out" --disable-static >/dev/null
+        make -j3 install >/dev/null
+        echo "LIBUSB_DYLIB=$PWD/out/lib/libusb-1.0.0.dylib" >> "$GITHUB_ENV"
+
+    - name: Build app bundle and DMG
+      env:
+        CMAKE_ARGS: ${{ env.CCACHE_ARGS }}
+      run: scripts/build_macos_app.sh build/macos
+
+    # No smoke run of the bundle: GitHub's macOS VMs have no OpenGL (GLFW gets no accelerated
+    # pixel format). scripts/build_macos_app.sh verifies the signature; run the .app on a Mac.
+
+    - name: Upload DMG
+      uses: actions/upload-artifact@v6
+      with:
+        name: KrakenExplorer-macOS-dmg
+        path: "build/macos/kraken-explorer-*-macos-*.dmg"
+        if-no-files-found: error
+
+    - *ccache_save
+
   release:
     name: Release
     if: github.ref_type == 'tag' || inputs.draft_release
-    needs: [unit-tests, format-compat, package, windows]
+    needs: [unit-tests, format-compat, package, windows, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

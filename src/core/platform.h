@@ -17,9 +17,10 @@
   along with Kraken Explorer.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// What differs between Linux and Windows, as free functions: files and mappings for the frame
-// cache (ui/frame_cache.cpp), memory hints, well-known directories. platform_posix.cpp and
-// platform_win32.cpp implement it; sockets are in core/net.h, serial ports in core/serial.h.
+// What differs between Linux, macOS and Windows, as free functions: files and mappings for the
+// frame cache (ui/frame_cache.cpp), memory hints, well-known directories. platform_posix.cpp
+// (Linux and macOS) and platform_win32.cpp implement it; sockets are in core/net.h, serial ports
+// in core/serial.h.
 
 #pragma once
 
@@ -50,7 +51,8 @@ bool file_write_at(PlatformFile f, const void* data, std::size_t size, uint64_t 
 [[nodiscard]] bool file_resize(PlatformFile f, uint64_t size);
 
 // An anonymous file in RAM (Linux memfd), or platform_no_file where there is none (Windows: a
-// pagefile section cannot grow, and mapped file writes are not throttled there anyway).
+// pagefile section cannot grow, and mapped file writes are not throttled there anyway; macOS:
+// no memfd).
 [[nodiscard]] PlatformFile file_ram();
 // Another handle on the same file (survives file_close of f).
 [[nodiscard]] PlatformFile file_dup(PlatformFile f);
@@ -89,13 +91,15 @@ bool mem_prefetch(PlatformFile f, void* map, uint64_t off, std::size_t size);
 // RAM a new allocation can use without swapping: free plus droppable page cache.
 [[nodiscard]] uint64_t platform_available_ram();
 [[nodiscard]] int platform_pid();
-// Timed waits wake within about a millisecond. Windows rounds them to its 15.6 ms tick unless a
-// process asks; the threads that pace frames (cyclic transmit, replay) call this when they start.
+// Timed waits of the calling thread wake within about a millisecond: Windows rounds them to its
+// 15.6 ms tick unless the process asks, macOS coalesces them unless the thread is real-time. The
+// threads that pace frames (cyclic transmit, replay, macros) call this first thing.
 void platform_fine_timers();
 
-// Directories. $XDG_CONFIG_HOME / $XDG_CACHE_HOME win on both platforms when set (tests and
+// Directories. $XDG_CONFIG_HOME / $XDG_CACHE_HOME win everywhere when set (tests and
 // benchmarks point them at scratch directories); otherwise ~/.config and ~/.cache on Linux,
-// %APPDATA% and %LOCALAPPDATA% on Windows. Empty when nothing is known.
+// ~/Library/Application Support and ~/Library/Caches on macOS, %APPDATA% and %LOCALAPPDATA% on
+// Windows. Empty when nothing is known.
 [[nodiscard]] std::filesystem::path platform_home_dir();
 [[nodiscard]] std::filesystem::path platform_config_dir();
 [[nodiscard]] std::filesystem::path platform_cache_dir();

@@ -48,6 +48,11 @@ target_include_directories(imgui SYSTEM PUBLIC
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 # 32-bit ImWchar: codepoints above U+FFFF (the squid glyph in ui/theme, emoji typed into text fields).
 target_compile_definitions(imgui PUBLIC IMGUI_USE_WCHAR32)
+# Clang's -fsanitize=undefined also checks float-to-int casts (GCC's does not): ImGui's
+# CalcWindowContentSizes truncates a NaN content size in the headless dbc_editor/lin_control tests.
+if(KRAKEN_SANITIZE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(imgui PRIVATE -fno-sanitize=float-cast-overflow)
+endif()
 
 add_library(implot STATIC
     ${implot_SOURCE_DIR}/implot.cpp
@@ -83,7 +88,9 @@ else()
     # System dependencies (pkg-config), exposed as PkgConfig::<NAME> targets
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
-    pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-3.0 libnl-route-3.0)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux") # SocketCAN link control (drivers/socketcan.cpp) only
+        pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-3.0 libnl-route-3.0)
+    endif()
     pkg_check_modules(PYTHON REQUIRED IMPORTED_TARGET python3-embed)
     find_package(pybind11 CONFIG REQUIRED)
     find_package(ZLIB REQUIRED) # core/png.cpp (deflate), ui/replay.cpp (BLF containers)

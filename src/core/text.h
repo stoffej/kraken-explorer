@@ -34,6 +34,8 @@
 #include <string_view>
 #include <type_traits>
 
+#include "core/charconv.h"
+
 // Whole-string conversion: fails on empty input or trailing characters.
 template <typename T>
 [[nodiscard]] bool parse_number(std::string_view s, T& value, int base = 10)
@@ -42,7 +44,7 @@ template <typename T>
     std::from_chars_result r{};
     if constexpr (std::is_floating_point_v<T>)
     {
-        r = std::from_chars(s.data(), end, value);
+        r = float_from_chars(s.data(), end, value);
     }
     else
     {

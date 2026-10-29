@@ -280,7 +280,7 @@ int main(int argc, char** argv)
     // GLFW cannot place windows on Wayland, so imgui_impl_glfw turns multi-viewports off there.
     // Prefer X11 (XWayland) whenever an X display exists so floating docks become OS windows.
     // ponytail: XWayland scales blurry on fractional HiDPI; drop this if that matters more.
-#ifndef _WIN32
+#ifdef __linux__
     if (smoke_frames >= 0 || std::getenv("DISPLAY") != nullptr)
     {
         // Smoke runs are headless under xvfb-run, which leaves WAYLAND_DISPLAY set: without
@@ -323,6 +323,13 @@ int main(int argc, char** argv)
     ImGui_ImplOpenGL3_Init("#version 330");
     float dpi_scale = 1.0f;
     glfwGetWindowContentScale(window, &dpi_scale, nullptr);
+#ifdef __APPLE__
+    // macOS sizes windows in points and ImGui renders at the framebuffer scale (2 on Retina), so
+    // sizes stay unscaled there; only the icon atlas uses the content scale, for sharp cells.
+    const float layout_scale = 1.0f;
+#else
+    const float layout_scale = dpi_scale;
+#endif
     icons_init(std::max(dpi_scale, 2.0f)); // 2x cells: stay sharp at font scales up to 175 %
     theme_logo_init(window, 256); // also the About logo, drawn at ~10x font size
 
@@ -330,7 +337,7 @@ int main(int argc, char** argv)
     app.tasks.wake = wake_main_loop; // RX threads and posted tasks end glfwWaitEventsTimeout at once
     settings_init(app); // before the interfaces: CANblaster, recording folder, tabs + layout
     settings_apply_theme(app);
-    app.fonts = theme_load_fonts(15.0f * dpi_scale); // ui/font_scale multiplies it via style.FontScaleMain;
+    app.fonts = theme_load_fonts(15.0f * layout_scale); // ui/font_scale multiplies it via style.FontScaleMain;
     app_init_interfaces(app);
     updater_init(app.updater, app.settings.update_check && smoke_frames < 0); // a smoke run asks nobody
     RestApi api;

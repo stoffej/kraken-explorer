@@ -9,6 +9,7 @@
 #include <misc/cpp/imgui_stdlib.h>
 
 #include "app.h"
+#include "core/local_time.h"
 #include "ui/theme.h"
 
 namespace
@@ -101,7 +102,7 @@ void draw_recording_dialog(App& app, RecordingDialogState& s)
         }
         ImGui::EndCombo();
     }
-    const auto now = std::chrono::current_zone()->to_local(std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+    const auto now = to_local_time(std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
     RecordingConfig example = s.edit; // the split checkbox below only reaches s.edit on OK
     example.split_size_mb = s.split ? s.split_mb : 0;
     ImGui::TextDisabled("Example: %s", recorder_file_name(example, now, 1).c_str());

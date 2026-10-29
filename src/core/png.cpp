@@ -42,7 +42,7 @@ std::vector<uint8_t> png_encode(int w, int h, std::span<const uint8_t> rgba)
         row[0] = y == 0 ? 0 : 2;
         for (std::size_t x = 0; x < stride; ++x)
         {
-            row[1 + x] = y == 0 ? cur[x] : static_cast<uint8_t>(cur[x] - cur[x - stride]);
+            row[1 + x] = y == 0 ? cur[x] : static_cast<uint8_t>(cur[x] - (cur - stride)[x]); // not cur[x - stride]: x - stride wraps
         }
     }
     uLongf size = compressBound(static_cast<uLong>(raw.size()));

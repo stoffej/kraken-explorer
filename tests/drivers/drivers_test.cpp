@@ -13,6 +13,7 @@
 
 #include "drivers/driver.h"
 
+#ifdef __linux__
 #include <linux/can.h>
 #include <linux/can/error.h>
 #include <linux/can/raw.h>
@@ -21,6 +22,7 @@
 #include <unistd.h>
 
 extern const DriverOps socketcan_driver;
+#endif
 
 namespace
 {
@@ -199,6 +201,7 @@ TEST_CASE("a read error closes the interface and the listener reopens it a secon
     CHECK(fake.closed == 2);
 }
 
+#ifdef __linux__ // SocketCAN on vcan0 / can0
 TEST_CASE("SocketCAN on vcan0: RX from another socket, TX echo, error frames")
 {
     if (if_nametoindex("vcan0") == 0)
@@ -445,6 +448,7 @@ TEST_CASE("SocketCAN stats report the controller's bitrate: can0 at 250k, 0 for 
     CHECK(st.bitrate == 250000);
     CHECK(st.data_bitrate == 0); // PCAN-USB is classic CAN
 }
+#endif
 
 TEST_CASE("SocketCAN link commands (GUI up/down, vcan add/delete)")
 {
@@ -478,8 +482,10 @@ TEST_CASE("SocketCAN link commands (GUI up/down, vcan add/delete)")
 
     CHECK_FALSE(socketcan_link_exists("nosuchcan9"));
     CHECK_FALSE(socketcan_link_up("nosuchcan9"));
+#ifdef __linux__ // elsewhere no link exists
     CHECK(socketcan_link_exists("lo"));
     CHECK(socketcan_link_up("lo"));
+#endif
 }
 
 TEST_CASE("pkexec exit status and stderr classify the ip failure")

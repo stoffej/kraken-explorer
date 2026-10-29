@@ -12,6 +12,7 @@
 #include <imgui_internal.h> // SetKeyOwner
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "core/local_time.h"
 #include "core/text.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
@@ -136,9 +137,8 @@ std::string time_text(fs::file_time_type t)
 {
     try
     {
-        const auto sys = std::chrono::floor<std::chrono::minutes>(std::chrono::clock_cast<std::chrono::system_clock>(t));
-        const std::chrono::zoned_time local(std::chrono::current_zone(), sys);
-        return std::format("{:%Y-%m-%d %H:%M}", local.get_local_time());
+        const auto sys = std::chrono::floor<std::chrono::minutes>(fs::file_time_type::clock::to_sys(t));
+        return std::format("{:%Y-%m-%d %H:%M}", to_local_time(sys));
     }
     catch (const std::exception&)
     {

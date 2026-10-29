@@ -23,12 +23,14 @@ namespace
 
 // The bundled example scripts: examples/ of a source-tree build (build/src/../..), examples/
 // next to the executable (the Windows zip, and a Windows build tree: the sources are elsewhere),
-// /usr/share/kraken-explorer/examples when installed; empty (last used dir) when none exists.
+// Resources/examples of the macOS .app, /usr/share/kraken-explorer/examples when installed;
+// empty (last used dir) when none exists.
 std::string examples_dir()
 {
     std::error_code ec;
     const std::filesystem::path exe = platform_exe_path();
-    for (const std::filesystem::path dir : {exe.parent_path() / "../../examples", exe.parent_path() / "examples", std::filesystem::path("/usr/share/kraken-explorer/examples")})
+    for (const std::filesystem::path dir : {exe.parent_path() / "../../examples", exe.parent_path() / "examples", exe.parent_path() / "../Resources/examples",
+                                            std::filesystem::path("/usr/share/kraken-explorer/examples")})
     {
         if (std::filesystem::is_directory(dir, ec))
         {

@@ -26,6 +26,7 @@
 #include <format>
 #include <utility>
 
+#include "core/local_time.h"
 #include "core/log.h"
 #include "core/pcapng.h"
 #include "core/text.h"
@@ -308,7 +309,7 @@ void start_recording(Recorder& r)
         r.pending.clear();
         r.dropped = 0;
     }
-    r.session_start = floor<seconds>(current_zone()->to_local(system_clock::now()));
+    r.session_start = floor<seconds>(to_local_time(system_clock::now()));
     r.channels.clear();
     r.file_index = 0;
     r.total_bytes = 0;

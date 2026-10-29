@@ -28,6 +28,7 @@
 #include <future>
 
 #include "app.h"
+#include "core/charconv.h"
 #include "core/log.h"
 #include "core/net.h"
 #include "core/tasks.h"
@@ -163,7 +164,7 @@ std::string uds_json(App& app, std::string_view path, std::string_view body, int
     if (const std::string t = json_get(body, "timeout"); !t.empty())
     {
         double sec = 0.0;
-        if (std::from_chars(t.data(), t.data() + t.size(), sec).ec == std::errc{} && sec > 0.0)
+        if (float_from_chars(t.data(), t.data() + t.size(), sec).ec == std::errc{} && sec > 0.0)
         {
             timing.p2 = std::chrono::milliseconds(static_cast<int64_t>(sec * 1000.0));
         }

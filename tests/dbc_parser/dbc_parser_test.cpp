@@ -259,6 +259,38 @@ VAL_ 100 State 0 "Off" 1 "On" 15 "Invalid" ;
     CHECK(can_signal_value_name(*sig, 7).empty());
 }
 
+TEST_CASE("VAL_ and CM_ name an extended message by its 29-bit id too")
+{
+    // As some tools write it: BO_ with bit 31, the references without.
+    CanDb db;
+    REQUIRE(parse(R"(BO_ 2667576602 Ext: 8 ECU_A
+ SG_ sqi : 0|8@1- (1,0) [-3|1] "" ECU_B
+
+CM_ SG_ 520092954 sqi "Signal quality";
+VAL_ 520092954 sqi 1 "OK" -1 "GEN ERROR" ;
+)", db));
+
+    const CanDbSignal* sig = signal(db, 2667576602u, "sqi");
+    REQUIRE(sig != nullptr);
+    CHECK(sig->comment == "Signal quality");
+    CHECK(can_signal_value_name(*sig, 1) == "OK");
+}
+
+TEST_CASE("VAL_ for a signal or message that is gone is skipped")
+{
+    CanDb db;
+    std::vector<DbcError> errors;
+    CHECK(parse(R"(BO_ 100 M: 8 ECU_A
+ SG_ State : 0|4@1+ (1,0) [0|15] "" ECU_B
+
+VAL_ 100 Gone 0 "Off" 1 "On" ;
+VAL_ 999 State 0 "Off" ;
+VAL_ 100 State 1 "On" ;
+)", db, true, &errors));
+    CHECK(errors.empty());
+    CHECK(can_signal_value_name(*signal(db, 100, "State"), 1) == "On");
+}
+
 TEST_CASE("parses comments")
 {
     CanDb db;

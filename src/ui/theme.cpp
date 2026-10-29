@@ -371,8 +371,12 @@ void theme_logo_init(GLFWwindow* window, int size)
     {
         return;
     }
+#ifndef __APPLE__ // macOS windows have no icon: the Dock shows the .app's icns
     const GLFWimage img{size, size, rgba.data()};
     glfwSetWindowIcon(window, 1, &img);
+#else
+    (void)window;
+#endif
     glGenTextures(1, &g_logo);
     glBindTexture(GL_TEXTURE_2D, g_logo);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -401,6 +405,18 @@ bool theme_os_prefers_dark()
     RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",
                  RRF_RT_REG_DWORD, nullptr, &light, &size);
     return light == 0;
+#elif defined(__APPLE__)
+    // AppleInterfaceStyle is "Dark" in dark mode and absent in light mode.
+    // ponytail: `defaults` subprocess instead of AppKit; one call at startup, no live updates.
+    FILE* p = popen("defaults read -g AppleInterfaceStyle 2>/dev/null", "r");
+    if (!p)
+    {
+        return false;
+    }
+    char out[32] = {};
+    const size_t n = std::fread(out, 1, sizeof(out) - 1, p);
+    pclose(p);
+    return n >= 4 && std::strncmp(out, "Dark", 4) == 0;
 #else
     // org.freedesktop.appearance color-scheme: 0 no preference, 1 dark, 2 light.
     // ponytail: gdbus subprocess instead of linking libdbus; one call at startup, no live updates. Portal signal via libdbus if live switching is wanted.

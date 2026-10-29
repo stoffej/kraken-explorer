@@ -22,6 +22,7 @@
 #include <imgui_internal.h>
 
 #include "app.h"
+#include "core/local_time.h"
 #include "core/trace_file_writer.h"
 #include "ui/frame_cache.h"
 #include "ui/replay.h"
@@ -148,7 +149,7 @@ TEST_CASE("Vector ASC events")
     CHECK(f.frames[1].ts_ns - f.frames[0].ts_ns == 500000000);
     // Frame times count from the header's date (local time).
     using namespace std::chrono;
-    const auto date = current_zone()->to_sys(local_days{2026y / September / 25} + 10h);
+    const auto date = to_sys_time(local_days{2026y / September / 25} + 10h);
     CHECK(f.frames[0].ts_ns == duration_cast<nanoseconds>(date.time_since_epoch()).count());
     CHECK(is_error_frame(f.frames[2]));
     CHECK(has_flag(f.frames[3], bus_flag::fd));
@@ -890,15 +891,9 @@ TEST_CASE("MF4: python-can's bus logging file, asammdf's DZ variant, and our own
         // CEST (UTC+2), where the first frame reads as 1'700'000'000 s; elsewhere it is off by the
         // difference to that zone (no time zone database: the parser keeps the header as UTC).
         int64_t first_ns = 1'700'000'000'000'000'000 + int64_t{7200} * 1'000'000'000;
-        try
-        {
-            using namespace std::chrono;
-            const local_seconds written{1'790'961'382s}; // the header's start time, as in the file
-            first_ns -= duration_cast<nanoseconds>(current_zone()->get_info(written).first.offset).count();
-        }
-        catch (const std::exception&)
-        {
-        }
+        using namespace std::chrono;
+        const local_seconds written{1'790'961'382s}; // the header's start time, as in the file
+        first_ns -= duration_cast<nanoseconds>(written.time_since_epoch() - to_sys_time(written).time_since_epoch()).count();
         for (std::size_t i = 0; i < f.frames.size(); ++i)
         {
             CHECK(std::abs(f.frames[i].ts_ns - (first_ns + static_cast<int64_t>(i) * 10'000'000)) < 1000);

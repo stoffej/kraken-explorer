@@ -280,8 +280,8 @@ AutobaudResult socketcan_autobaud(const std::string& name, IfaceConfig timing);
 [[nodiscard]] bool socketcan_link_exists(const std::string& name);
 
 // Linux only: elsewhere the functions above fail and the UI leaves out the vcan / link controls.
-#ifdef _WIN32
-inline constexpr bool socketcan_available = false;
-#else
+#ifdef __linux__
 inline constexpr bool socketcan_available = true;
+#else
+inline constexpr bool socketcan_available = false;
 #endif

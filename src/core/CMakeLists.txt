@@ -3,6 +3,8 @@ add_library(kraken_serial STATIC $<IF:$<BOOL:${WIN32}>,serial_win32.cpp,serial.c
 target_include_directories(kraken_serial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..) # #include "core/serial.h"
 if(WIN32)
     target_link_libraries(kraken_serial PRIVATE setupapi) # COM port list
+elseif(APPLE)
+    target_link_libraries(kraken_serial PRIVATE "-framework IOKit" "-framework CoreFoundation") # port list
 endif()
 
 # core: BusMessage POD + log ring buffer. Later core modules add to it with target_sources.

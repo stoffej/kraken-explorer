@@ -7,7 +7,11 @@
 #include <atomic>
 #include <chrono>
 #include <poll.h>
+#ifdef __APPLE__
+#include <util.h> // openpty
+#else
 #include <pty.h>
+#endif
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -22,6 +26,7 @@ namespace
 struct Pty
 {
     int master = -1;
+    int slave_fd = -1; // held open: with no slave open macOS reports a hangup on the master
     std::string slave;
 };
 
@@ -31,7 +36,7 @@ Pty pty_open()
     int slave = -1;
     char name[256] = {};
     REQUIRE(openpty(&p.master, &slave, name, nullptr, nullptr) == 0);
-    close(slave); // the driver opens it by name
+    p.slave_fd = slave; // the driver opens it again by name
     p.slave = name;
     return p;
 }
@@ -148,6 +153,7 @@ TEST_CASE("slcan: device without confirmations")
     slcan_driver.close(iface);
     CHECK(pty_drain(p.master) == "C\r");
     iface.impl.reset();
+    close(p.slave_fd);
     close(p.master);
 }
 
@@ -220,5 +226,6 @@ TEST_CASE("slcan: confirm mode, CR = ACK, BEL = NACK")
     stop = true;
     dev.join();
     CHECK(seen == "C\rV\rS001234\rM1\rO\rt1000\rt6660\rC\r");
+    close(p.slave_fd);
     close(p.master);
 }

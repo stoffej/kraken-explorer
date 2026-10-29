@@ -1,15 +1,16 @@
 #pragma once
 
-#include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
+
+#include "core/move_only_function.h"
 
 struct App;
 
 // Work handed from any thread to the main thread. Replaces Qt's queued and
 // BlockingQueuedConnection: the main loop calls tasks_drain() once per frame.
-using Task = std::move_only_function<void(App&)>;
+using Task = MoveOnlyFunction<void(App&)>;
 
 struct Tasks
 {

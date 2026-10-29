@@ -75,6 +75,8 @@
 #include <variant>
 #include <vector>
 
+#include "core/charconv.h"
+
 namespace ldf
 {
 
@@ -413,7 +415,7 @@ inline double read_raw_number(LdfParser& p)
         while (!at_end(p) && is_digit(peek(p))) s += advance(p);
     }
     double v = 0.0;
-    std::from_chars(s.data(), s.data() + s.size(), v);
+    float_from_chars(s.data(), s.data() + s.size(), v);
     return v;
 }
 

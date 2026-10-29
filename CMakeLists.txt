@@ -15,6 +15,10 @@ if(NOT KRAKEN_VERSION)
     endif()
 endif()
 
+# macOS: the oldest release the code is built for (before project(), as CMake requires). 13.3 is
+# the first with floating-point std::to_chars in Apple's libc++.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version")
+
 project(kraken_explorer VERSION ${KRAKEN_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)

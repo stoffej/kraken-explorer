@@ -17,6 +17,7 @@
 #include <pugixml.hpp>
 
 #include "app.h"
+#include "core/local_time.h"
 #include "core/setup.h"
 #include "core/fuzzy.h"
 #include "core/text.h"
@@ -232,35 +233,15 @@ DbText db_text(const App& app, const BusMessage& m)
     return d != nullptr ? DbText{.name = d->name, .sender = d->sender, .comment = d->comment} : DbText{};
 }
 
-const std::chrono::time_zone* local_zone()
-{
-    static const std::chrono::time_zone* tz = []() -> const std::chrono::time_zone*
-    {
-        try
-        {
-            return std::chrono::current_zone();
-        }
-        catch (const std::exception&)
-        {
-            return nullptr; // no tzdata: absolute times fall back to UTC
-        }
-    }();
-    return tz;
-}
-
 void append_time(std::string& out, TimestampMode mode, int64_t ts, int64_t prev_ts, int64_t first_ts)
 {
     using namespace std::chrono;
     const auto sys = floor<milliseconds>(sys_time<nanoseconds>(nanoseconds(ts)));
     switch (mode)
     {
-    case TimestampMode::Absolute:
-        if (const time_zone* tz = local_zone())
-        {
-            std::format_to(std::back_inserter(out), "{:%H:%M:%S}", zoned_time(tz, sys).get_local_time());
-            return;
-        }
-        [[fallthrough]];
+    case TimestampMode::Absolute: // UTC when there is no tzdata
+        std::format_to(std::back_inserter(out), "{:%H:%M:%S}", to_local_time(sys));
+        return;
     case TimestampMode::AbsoluteUtc:
         std::format_to(std::back_inserter(out), "{:%H:%M:%S}", sys);
         return;

@@ -53,6 +53,7 @@ struct UiTest
         io.DisplaySize = display;
         io.DeltaTime = 1.0f / 60.0f;
         io.IniFilename = nullptr;
+        io.ConfigMacOSXBehaviors = false; // on macOS ImGui swaps Ctrl and Cmd; the tests send Ctrl as on Linux
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | (docking ? ImGuiConfigFlags_DockingEnable : 0);
         // No renderer backend: ImGui 1.92 then wants a pre-built atlas (RendererHasTextures off).
         unsigned char* pixels = nullptr;

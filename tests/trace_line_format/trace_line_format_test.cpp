@@ -259,6 +259,14 @@ TEST_CASE("candump timestamp is exact seconds.microseconds")
     CHECK(line == "(1700000000.123456) vcan0 123#");
 }
 
+TEST_CASE("candump interface names keep one field")
+{
+    const BusMessage m{ .id = 0x123 };
+    std::string line;
+    append_candump_line(line, m, "PCAN-USB (USB1)");
+    CHECK(line == "(0.000000) PCAN-USB_(USB1) 123#");
+}
+
 TEST_CASE("parse ASC CAN FD line")
 {
     struct Row

@@ -268,8 +268,9 @@ void stop_all_periodic(PyState& s)
 }
 
 // A Python standard library shipped next to the executable (<app>/lib/pythonX.Y, or
-// <prefix>/lib/pythonX.Y with the binary in <prefix>/bin as in an AppImage) wins over
-// the compiled-in prefix. Distro installs have none and keep libpython's own.
+// <prefix>/lib/pythonX.Y with the binary in <prefix>/bin as in an AppImage, or the
+// Python.framework in a macOS .app's Contents/Frameworks) wins over the compiled-in prefix.
+// Distro installs have none and keep libpython's own.
 void set_bundled_python_home()
 {
     if (const char* home = std::getenv("PYTHONHOME"); home != nullptr && *home != '\0')
@@ -283,8 +284,10 @@ void set_bundled_python_home()
     {
         return;
     }
-    const fs::path landmark = fs::path("lib") / std::format("python{}.{}", PY_MAJOR_VERSION, PY_MINOR_VERSION) / "os.py";
-    for (const fs::path prefix : {exe.parent_path(), exe.parent_path().parent_path()})
+    const std::string version = std::format("{}.{}", PY_MAJOR_VERSION, PY_MINOR_VERSION);
+    const fs::path landmark = fs::path("lib") / ("python" + version) / "os.py";
+    const fs::path framework = exe.parent_path().parent_path() / "Frameworks/Python.framework/Versions" / version;
+    for (const fs::path prefix : {exe.parent_path(), exe.parent_path().parent_path(), framework})
     {
         if (fs::exists(prefix / landmark, ec))
         {

@@ -39,6 +39,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -51,6 +52,13 @@
 #ifdef _WIN32
     static const int started = [] { WSADATA d; return WSAStartup(MAKEWORD(2, 2), &d); }();
     return started == 0 ? static_cast<int>(socket(domain, type, protocol)) : -1;
+#elif defined(__APPLE__) // no SOCK_CLOEXEC there
+    const int fd = socket(domain, type, protocol);
+    if (fd >= 0)
+    {
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    return fd;
 #else
     return socket(domain, type | SOCK_CLOEXEC, protocol);
 #endif

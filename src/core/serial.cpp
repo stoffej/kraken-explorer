@@ -11,6 +11,28 @@
 #include <termios.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/serial/IOSerialKeys.h>
+#include <IOKit/serial/ioss.h> // IOSSIOSPEED
+#include <sys/select.h>
+#endif
+
+#ifdef __APPLE__
+// macOS has only the POSIX B* constants up to B230400: the port is configured at 9600 and the
+// real rate set with IOSSIOSPEED afterwards (speed_t is the rate itself on Darwin).
+static speed_t to_speed(int baud)
+{
+    switch (baud)
+    {
+    case 9600: case 19200: case 38400: case 57600: case 115200: case 230400: case 460800:
+    case 500000: case 921600: case 1000000: case 2000000: case 3000000: case 4000000:
+        return static_cast<speed_t>(baud);
+    default: return B0;
+    }
+}
+#else
 static speed_t to_speed(int baud)
 {
     switch (baud)
@@ -31,6 +53,7 @@ static speed_t to_speed(int baud)
     default: return B0;
     }
 }
+#endif
 
 static std::string errno_text()
 {
@@ -62,10 +85,18 @@ bool serial_open(SerialPort &port, const std::string &name, int baud)
         tio.c_cflag &= ~(CSTOPB | CRTSCTS | PARENB);
         tio.c_cc[VMIN] = 0; // read() returns what is there; waiting is done with poll()
         tio.c_cc[VTIME] = 0;
+#ifdef __APPLE__
+        ::cfsetspeed(&tio, B9600);
+#else
         ::cfsetispeed(&tio, speed);
         ::cfsetospeed(&tio, speed);
+#endif
     }
-    if (!ok || ::tcsetattr(fd, TCSANOW, &tio) != 0 || ::fcntl(fd, F_SETFL, 0) != 0)
+    if (!ok || ::tcsetattr(fd, TCSANOW, &tio) != 0 || ::fcntl(fd, F_SETFL, 0) != 0
+#ifdef __APPLE__
+        || (::ioctl(fd, IOSSIOSPEED, &speed) != 0 && errno != ENOTTY) // ENOTTY: a pty, which has no rate
+#endif
+    )
     {
         port.error = name + ": " + errno_text();
         ::close(fd);
@@ -106,6 +137,44 @@ bool serial_write(SerialPort &port, const void *data, size_t size)
     return true;
 }
 
+#ifdef __APPLE__
+// select(), not poll(): Darwin's poll(2) "does not support devices" (BUGS), and a tty is one.
+long serial_read(SerialPort &port, void *data, size_t size, std::chrono::milliseconds timeout)
+{
+    if (port.fd >= FD_SETSIZE)
+    {
+        port.error = "file descriptor too large for select()";
+        return -1;
+    }
+    fd_set in;
+    FD_ZERO(&in);
+    FD_SET(port.fd, &in);
+    timeval tv{.tv_sec = static_cast<time_t>(timeout.count() / 1000),
+               .tv_usec = static_cast<suseconds_t>(timeout.count() % 1000 * 1000)};
+    const int r = ::select(port.fd + 1, &in, nullptr, nullptr, &tv);
+    if (r == 0 || (r < 0 && errno == EINTR))
+    {
+        return 0;
+    }
+    if (r < 0)
+    {
+        port.error = errno_text();
+        return -1;
+    }
+    const ssize_t n = ::read(port.fd, data, size);
+    if (n < 0)
+    {
+        port.error = errno_text();
+        return -1;
+    }
+    if (n == 0) // readable without data: the device is gone
+    {
+        port.error = "device disconnected";
+        return -1;
+    }
+    return static_cast<long>(n);
+}
+#else
 long serial_read(SerialPort &port, void *data, size_t size, std::chrono::milliseconds timeout)
 {
     pollfd pfd{.fd = static_cast<int>(port.fd), .events = POLLIN, .revents = 0};
@@ -132,12 +201,77 @@ long serial_read(SerialPort &port, void *data, size_t size, std::chrono::millise
     }
     return static_cast<long>(n);
 }
+#endif
 
 void serial_clear(SerialPort &port) noexcept
 {
-    ::tcflush(port.fd, TCIOFLUSH);
+    ::tcflush(port.fd, TCIFLUSH);
 }
 
+#ifdef __APPLE__
+// A string or number property of a registry entry; opts searches up the parents (the USB
+// device a serial interface belongs to). Empty or 0 when there is none.
+static std::string registry_string(io_object_t entry, CFStringRef key, IOOptionBits opts)
+{
+    std::string out;
+    CFTypeRef v = IORegistryEntrySearchCFProperty(entry, kIOServicePlane, key, kCFAllocatorDefault, opts);
+    if (v == nullptr)
+    {
+        return out;
+    }
+    char buf[1024];
+    if (CFGetTypeID(v) == CFStringGetTypeID() && CFStringGetCString(static_cast<CFStringRef>(v), buf, sizeof buf, kCFStringEncodingUTF8))
+    {
+        out = buf;
+    }
+    CFRelease(v);
+    return out;
+}
+
+static uint16_t registry_u16(io_object_t entry, CFStringRef key, IOOptionBits opts)
+{
+    int value = 0;
+    CFTypeRef v = IORegistryEntrySearchCFProperty(entry, kIOServicePlane, key, kCFAllocatorDefault, opts);
+    if (v == nullptr)
+    {
+        return 0;
+    }
+    if (CFGetTypeID(v) == CFNumberGetTypeID())
+    {
+        CFNumberGetValue(static_cast<CFNumberRef>(v), kCFNumberIntType, &value);
+    }
+    CFRelease(v);
+    return static_cast<uint16_t>(value);
+}
+
+// Every IOSerialBSDClient by its callout device (/dev/cu.*: unlike /dev/tty.* its open() does
+// not wait for carrier detect), with VID/PID/serial of the USB device above it.
+std::vector<SerialPortInfo> serial_list_ports()
+{
+    std::vector<SerialPortInfo> ports;
+    io_iterator_t it = 0;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching(kIOSerialBSDServiceValue), &it) != KERN_SUCCESS)
+    {
+        return ports;
+    }
+    const IOOptionBits up = kIORegistryIterateRecursively | kIORegistryIterateParents;
+    while (const io_object_t service = IOIteratorNext(it))
+    {
+        SerialPortInfo info;
+        info.name = registry_string(service, CFSTR(kIOCalloutDeviceKey), 0);
+        info.vid = registry_u16(service, CFSTR("idVendor"), up);
+        info.pid = registry_u16(service, CFSTR("idProduct"), up);
+        info.serial = registry_string(service, CFSTR("USB Serial Number"), up);
+        IOObjectRelease(service);
+        if (!info.name.empty())
+        {
+            ports.push_back(std::move(info));
+        }
+    }
+    IOObjectRelease(it);
+    return ports;
+}
+#else
 static std::string read_line(const std::filesystem::path &p)
 {
     std::ifstream f(p);
@@ -182,6 +316,7 @@ std::vector<SerialPortInfo> serial_list_ports()
     }
     return ports;
 }
+#endif
 
 bool serial_is_open(const SerialPort &port) noexcept
 {

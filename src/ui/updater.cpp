@@ -489,7 +489,7 @@ void draw_updater(App& app, Updater& u)
             }
             else
             {
-                ImGui::TextDisabled("This install updates from the release page (.deb, zip).");
+                ImGui::TextDisabled("This install updates from the release page (.deb, zip, .dmg).");
             }
         }
         break;

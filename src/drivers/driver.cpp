@@ -36,7 +36,7 @@ extern const DriverOps grip_driver;
 extern const DriverOps canblast_driver;
 extern const DriverOps linde_driver;
 extern const DriverOps kvaser_driver;
-#ifdef _WIN32
+#ifndef __linux__
 extern const DriverOps pcan_driver;
 #endif
 
@@ -44,7 +44,7 @@ namespace
 {
 
 constexpr const DriverOps* drivers[] = {
-#ifndef _WIN32
+#ifdef __linux__
     &socketcan_driver,
 #endif
     &slcan_driver,
@@ -52,7 +52,7 @@ constexpr const DriverOps* drivers[] = {
     &canblast_driver,
     &linde_driver,
     &kvaser_driver,
-#ifdef _WIN32
+#ifndef __linux__
     &pcan_driver,
 #endif
 };

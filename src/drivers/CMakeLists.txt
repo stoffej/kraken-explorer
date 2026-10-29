@@ -12,12 +12,14 @@ target_link_libraries(kraken_drivers PRIVATE kraken_serial)
 target_sources(kraken_drivers PRIVATE canblast.cpp)
 
 target_sources(kraken_drivers PRIVATE socketcan_link.cpp) # `ip` command lines: portable
-if(NOT WIN32)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(kraken_drivers PRIVATE socketcan.cpp)
     target_link_libraries(kraken_drivers PRIVATE PkgConfig::LIBNL)
 else()
-    target_link_libraries(kraken_drivers PRIVATE ws2_32) # canblast.cpp
     target_sources(kraken_drivers PRIVATE pcan.cpp) # PCAN-Basic; on Linux PEAK adapters are SocketCAN
+endif()
+if(WIN32)
+    target_link_libraries(kraken_drivers PRIVATE ws2_32) # canblast.cpp
 endif()
 
 # Vendor interface of the 1d50:606f composite adapter: lin_usb (LindeAPI)

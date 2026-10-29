@@ -9,7 +9,11 @@
 
 #include "core/serial.h"
 
+#ifdef __APPLE__
+#include <util.h> // openpty
+#else
 #include <pty.h>
+#endif
 #include <unistd.h>
 
 using namespace std::chrono_literals;

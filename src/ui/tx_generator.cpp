@@ -907,6 +907,7 @@ void tx_generator_on_rx(TxGenerator& gen, std::span<const BusMessage> msgs, TxCl
 
 void tx_sender_loop(std::stop_token stop, TxGenerator& gen)
 {
+    platform_fine_timers();
     std::unique_lock lock(gen.mutex);
     while (!stop.stop_requested())
     {
@@ -970,7 +971,6 @@ void tx_generator_start(TxGenerator& gen, std::deque<Iface>& ifaces)
     if (!gen.sender.joinable())
     {
         gen.ifaces = &ifaces;
-        platform_fine_timers();
         gen.sender = std::jthread([&gen](std::stop_token stop) { tx_sender_loop(stop, gen); });
     }
 }
