@@ -78,7 +78,7 @@ struct InstrumentPanel
     int columns = 4;
     std::vector<Instrument> items;
     std::string search;          // signal picker filter
-    SignalSearch picker;         // fuzzy ranking of `search`
+    SignalSearch picker{.can_only = true, .list_all = true}; // fuzzy ranking of `search`; widgets bind signals that may not be on the bus yet
     uint64_t next_index = 0;     // next trace index to decode
     uint64_t trace_clears = 0;
     uint64_t setup_generation = UINT64_MAX; // forces a resolve on the first ingest

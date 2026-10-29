@@ -226,7 +226,6 @@ bool draw_signal_picker(App& app, InstrumentPanel& p, Instrument& inst)
     {
         return false;
     }
-    p.picker.can_only = true;
     const bool appearing = ImGui::IsWindowAppearing();
     if (appearing)
     {

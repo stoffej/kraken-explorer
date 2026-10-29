@@ -83,7 +83,6 @@ void draw_add_combo(App& app, WatchWindow& w)
     {
         return;
     }
-    w.picker.can_only = true;
     const bool appearing = ImGui::IsWindowAppearing();
     if (appearing)
     {
