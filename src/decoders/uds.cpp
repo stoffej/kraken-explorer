@@ -21,6 +21,7 @@
 #include <format>
 
 #include "decoders/decoders.h"
+#include "decoders/uds_client.h"
 
 namespace
 {
@@ -39,14 +40,16 @@ constexpr uint32_t tx_session_flag       = 0x40000000u;
 // 0x18DAxxyy, ...) are commonly reused across separate buses, so without a
 // per-channel key an interleaved frame from a second channel would look
 // like a sequence-number violation and kill the first channel's session.
-[[nodiscard]] uint64_t session_key(const BusMessage& frame) noexcept
+[[nodiscard]] uint64_t session_key(const BusMessage& frame, uint8_t ae_byte) noexcept
 {
     uint32_t key32 = has_flag(frame, bus_flag::extended) ? (frame.id | extended_session_flag) : frame.id;
     if (has_flag(frame, bus_flag::tx))
     {
         key32 |= tx_session_flag;
     }
-    return (static_cast<uint64_t>(frame.iface) << 32) | key32;
+    // Fold the interface and (with extended addressing) the address byte in, so parallel sessions
+    // on reused ids stay apart.
+    return (static_cast<uint64_t>(ae_byte) << 48) | (static_cast<uint64_t>(frame.iface) << 32) | key32;
 }
 
 // UDS service IDs begin at 0x10. Anything below that cannot be a valid SID.
@@ -77,12 +80,12 @@ void fill_out(ProtocolMessage& out, std::vector<uint8_t> payload, std::vector<Bu
     else if (sid & 0x40)
     {
         out.type = MessageType::PositiveResponse;
-        out.description = std::format("positive response to 0x{:02x}", sid - 0x40);
+        out.description = uds_describe({}, out.payload);
     }
     else
     {
         out.type = MessageType::Request;
-        out.description = std::format("uds request, sid 0x{:02x}", sid);
+        out.description = uds_describe_request(out.payload);
     }
 
     if (has_flag(last, bus_flag::extended))
@@ -98,15 +101,20 @@ void fill_out(ProtocolMessage& out, std::vector<uint8_t> payload, std::vector<Bu
 
 DecodeStatus uds_decode(UdsDecoder& d, const BusMessage& frame, ProtocolMessage& out)
 {
-    const int len = std::min<int>(frame.len, bus_max_data_bytes);
+    // Extended addressing (CPAC internal bus, some gateways) leads every frame with an address
+    // byte; the LIN diagnostic path passes a synthetic LIN frame that already has its NAD stripped,
+    // so it never gets the offset.
+    const int ae = (d.addr_ext && frame.type == BusType::CAN) ? 1 : 0;
+    const int len = std::min<int>(frame.len, bus_max_data_bytes) - ae;
     if (is_error_frame(frame) || has_flag(frame, bus_flag::rtr) || len < 1)
     {
         return DecodeStatus::Ignored;
     }
 
-    const auto& b = frame.data;
+    const uint8_t* b = frame.data.data() + ae;
     const uint8_t type = (b[0] >> 4) & 0x0F;
-    const uint64_t key = session_key(frame);
+    const uint8_t ae_byte = ae ? frame.data[0] : 0;
+    const uint64_t key = session_key(frame, ae_byte);
 
     if (has_flag(frame, bus_flag::extended))
     {
@@ -135,7 +143,11 @@ DecodeStatus uds_decode(UdsDecoder& d, const BusMessage& frame, ProtocolMessage&
             {
                 return DecodeStatus::Ignored;
             }
-            fill_out(out, {b.begin() + offset, b.begin() + offset + size}, {frame}, frame);
+            fill_out(out, {b + offset, b + offset + size}, {frame}, frame);
+            if (ae)
+            {
+                out.metadata["Address Extension"] = ae_byte;
+            }
             d.sessions.erase(key);
             return DecodeStatus::Completed;
         }
@@ -161,7 +173,7 @@ DecodeStatus uds_decode(UdsDecoder& d, const BusMessage& frame, ProtocolMessage&
         }
 
         auto& s = d.sessions[key];
-        s.data.assign(b.begin() + offset, b.begin() + len);
+        s.data.assign(b + offset, b + len);
         s.expected_size = size;
         s.next_sn = 1;
         s.frames.assign(1, frame);
@@ -196,6 +208,10 @@ DecodeStatus uds_decode(UdsDecoder& d, const BusMessage& frame, ProtocolMessage&
                 return DecodeStatus::Ignored;
             }
             fill_out(out, std::move(s.data), std::move(s.frames), frame);
+            if (ae)
+            {
+                out.metadata["Address Extension"] = ae_byte;
+            }
             d.sessions.erase(it);
             return DecodeStatus::Completed;
         }

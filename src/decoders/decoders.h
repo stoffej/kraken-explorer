@@ -71,7 +71,8 @@ struct IsotpSession
 
 struct UdsDecoder
 {
-    std::unordered_map<uint64_t, IsotpSession> sessions; // keyed by id, direction, interface
+    bool addr_ext = false; // the bus uses extended addressing: an address byte leads every frame
+    std::unordered_map<uint64_t, IsotpSession> sessions; // keyed by id, direction, interface, address byte
 };
 
 [[nodiscard]] DecodeStatus uds_decode(UdsDecoder& d, const BusMessage& frame, ProtocolMessage& out);

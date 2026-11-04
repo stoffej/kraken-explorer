@@ -32,6 +32,7 @@
 #include "core/log.h"
 #include "core/net.h"
 #include "core/tasks.h"
+#include "decoders/decoders.h"
 #include "ui/diag_dialog.h"
 
 namespace
@@ -142,34 +143,113 @@ std::string uds_json(App& app, std::string_view path, std::string_view body, int
     }
     const auto send = [&app](const BusMessage& m) { return uds_send(app, m); };
     const bool ext = json_get(body, "extended") == "true";
+    const auto ecu_json = [](const UdsEcu& e)
+    {
+        return std::format("{{\"tx\":\"0x{:X}\",\"rx\":\"0x{:X}\",\"extended\":{},\"guessed\":{}{}}}",
+                           e.tx_id, e.rx_id, e.extended, e.guessed,
+                           e.name.empty() ? "" : std::format(",\"name\":{}", json_string(e.name)));
+    };
     if (path == "/uds/scan")
     {
-        std::string out;
-        for (const UdsEcu& ecu : uds_scan(app.uds_client, send, static_cast<uint16_t>(index), std::chrono::milliseconds(300)))
+        std::vector<UdsEcu> ecus;
+        if (json_get(body, "physical") == "true")
         {
-            out += std::format("{}{{\"tx\":\"0x{:X}\",\"rx\":\"0x{:X}\",\"extended\":{},\"guessed\":{}}}",
-                               out.empty() ? "" : ",", ecu.tx_id, ecu.rx_id, ecu.extended, ecu.guessed);
+            UdsSweep s;
+            s.transport = {.iface = static_cast<uint16_t>(index), .extended = ext};
+            if (const auto f = json_id(json_get(body, "first")))
+            {
+                s.first = *f;
+            }
+            if (const auto l = json_id(json_get(body, "last")))
+            {
+                s.last = *l;
+            }
+            if (const auto te = json_id(json_get(body, "tester")))
+            {
+                s.tester = static_cast<uint8_t>(*te);
+            }
+            ecus = uds_sweep(app.uds_client, send, s);
+        }
+        else
+        {
+            ecus = uds_scan(app.uds_client, send, static_cast<uint16_t>(index), std::chrono::milliseconds(300));
+        }
+        std::string out;
+        for (const UdsEcu& ecu : ecus)
+        {
+            out += (out.empty() ? "" : ",") + ecu_json(ecu);
         }
         status = 200;
         return std::format("{{\"ecus\":[{}]}}", out);
     }
+
+    // Transport shared by /uds, /uds/services and /uds/dids.
+    const auto byte_of = [&](const char* key) -> std::optional<uint8_t>
+    {
+        const auto v = json_id(json_get(body, key));
+        return v && *v <= 0xFF ? std::optional<uint8_t>(static_cast<uint8_t>(*v)) : std::nullopt;
+    };
     const auto tx = json_id(json_get(body, "tx"));
     const auto rx = json_id(json_get(body, "rx"));
-    const auto req = parse_hex_bytes(json_get(body, "data"));
-    if (!tx || !rx || !req || req->empty())
+    if (!tx || !rx)
     {
-        return "{\"error\":\"need tx, rx (number or \\\"0x7E0\\\") and data (hex bytes like \\\"22 F1 90\\\")\"}";
+        return "{\"error\":\"need tx, rx (number or \\\"0x7E0\\\")\"}";
     }
+    UdsTarget t{.iface = static_cast<uint16_t>(index), .tx_id = *tx, .rx_id = *rx, .extended = ext,
+                .fd = json_get(body, "fd") == "true", .brs = json_get(body, "brs") == "true", .tx_len = 64};
+    if (const auto p = byte_of("padding"))
+    {
+        t.padding = *p;
+    }
+    t.tx_ae = byte_of("tx_ae");
+    t.rx_ae = byte_of("rx_ae");
     UdsTiming timing;
-    if (const std::string t = json_get(body, "timeout"); !t.empty())
+    const auto seconds = [&](const char* key, std::chrono::milliseconds& dst)
     {
+        const std::string s = json_get(body, key);
         double sec = 0.0;
-        if (float_from_chars(t.data(), t.data() + t.size(), sec).ec == std::errc{} && sec > 0.0)
+        if (!s.empty() && float_from_chars(s.data(), s.data() + s.size(), sec).ec == std::errc{} && sec > 0.0)
         {
-            timing.p2 = std::chrono::milliseconds(static_cast<int64_t>(sec * 1000.0));
+            dst = std::chrono::milliseconds(static_cast<int64_t>(sec * 1000.0));
         }
+    };
+    seconds("timeout", timing.p2);
+    seconds("p2_star", timing.p2_star);
+
+    if (path == "/uds/services")
+    {
+        std::string out;
+        for (const UdsServiceProbe& p : uds_service_scan(app.uds_client, send, t, timing))
+        {
+            if (p.supported())
+            {
+                out += std::format("{}{{\"sid\":\"0x{:02X}\",\"name\":{}}}", out.empty() ? "" : ",", p.sid,
+                                   json_string(uds_service_name(p.sid)));
+            }
+        }
+        status = 200;
+        return std::format("{{\"services\":[{}]}}", out);
     }
-    const UdsTarget t{.iface = static_cast<uint16_t>(index), .tx_id = *tx, .rx_id = *rx, .extended = ext};
+    if (path == "/uds/dids")
+    {
+        const auto first = json_id(json_get(body, "first")).value_or(0xF180);
+        const auto last = json_id(json_get(body, "last")).value_or(0xF1FF);
+        std::string out;
+        for (const UdsDidValue& v : uds_did_scan(app.uds_client, send, t, static_cast<uint16_t>(first),
+                                                 static_cast<uint16_t>(last), timing))
+        {
+            out += std::format("{}{{\"did\":\"0x{:04X}\",\"name\":{},\"data\":{}}}", out.empty() ? "" : ",", v.did,
+                               json_string(std::string(uds_did_name(v.did))), json_string(format_hex_bytes(v.data)));
+        }
+        status = 200;
+        return std::format("{{\"dids\":[{}]}}", out);
+    }
+
+    const auto req = parse_hex_bytes(json_get(body, "data"));
+    if (!req || req->empty())
+    {
+        return "{\"error\":\"need data (hex bytes like \\\"22 F1 90\\\")\"}";
+    }
     const UdsResult r = uds_request(app.uds_client, send, t, *req, timing);
     if (!r.error.empty())
     {
@@ -234,7 +314,8 @@ void serve(std::stop_token stop, RestApi& api, App& app)
             const std::string_view content(request.data() + header_end + 4, std::min(content_length, request.size() - header_end - 4));
             try
             {
-                if (method == "POST" && (path == "/uds" || path == "/uds/scan"))
+                if (method == "POST" && (path == "/uds" || path == "/uds/scan" || path == "/uds/services"
+                                         || path == "/uds/dids"))
                 {
                     body = uds_json(app, path, content, status);
                 }

@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <functional>
 #include <initializer_list>
 #include <vector>
@@ -75,7 +76,7 @@ TEST_CASE("single frame request and response, padded to 8 bytes")
     CHECK(ecu.sent[0].len == 8);
     CHECK(ecu.sent[0].data[0] == 0x02);
     CHECK(ecu.sent[0].data[3] == 0xCC);
-    CHECK(uds_describe(req, r.response) == "session 0x03 active");
+    CHECK(uds_describe(req, r.response) == "session 0x03 active, P2 50 ms P2* 5000 ms");
 }
 
 TEST_CASE("multi-frame response: the tester sends a flow control, the rest is reassembled")
@@ -249,7 +250,207 @@ TEST_CASE("DTC list text")
 {
     const Bytes req = {0x19, 0x02, 0xFF};
     const Bytes rsp = {0x59, 0x02, 0xFF, 0x01, 0x23, 0x00, 0x2F, 0xC1, 0x55, 0x10, 0x09};
-    CHECK(uds_describe(req, rsp) == "2 DTCs\n  P0123-00  status 0x2F\n  U0155-10  status 0x09");
+    CHECK(uds_describe(req, rsp) == "2 DTCs\n  P0123-00  status 0x2F testFailed|testFailedThisCycle|pending|confirmed|testFailedSinceClear\n  U0155-10  status 0x09 testFailed|confirmed");
+}
+
+TEST_CASE("CAN FD: long single frame and 64-byte consecutive frames")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        if ((m.data[0] >> 4) == 0) // our long single frame (0x00, len, ...)
+        {
+            BusMessage r{};
+            r.id = 0x7E8;
+            r.flags = bus_flag::fd;
+            r.data[0] = 0x00;
+            r.data[1] = 0x03;
+            r.data[2] = 0x6E;
+            r.data[3] = 0xF1;
+            r.data[4] = 0x90;
+            set_length(r, 12);
+            uds_client_rx(&e.client, r);
+        }
+    };
+    UdsTarget fd = engine;
+    fd.fd = true;
+    fd.tx_len = 64;
+    Bytes req = {0x2E, 0xF1, 0x90};
+    for (int i = 0; i < 37; ++i) req.push_back(static_cast<uint8_t>(i));
+    const UdsResult r = uds_request(ecu.client, ecu.send(), fd, req, quick);
+    CHECK(r.error.empty());
+    CHECK(r.response == Bytes{0x6E, 0xF1, 0x90});
+    REQUIRE(ecu.sent.size() == 1);        // 40 bytes fit one 64-byte FD single frame
+    CHECK(ecu.sent[0].data[0] == 0x00);   // FD long single frame escape
+    CHECK(ecu.sent[0].data[1] == 40);
+    CHECK(has_flag(ecu.sent[0], bus_flag::fd));
+}
+
+TEST_CASE("extended addressing: an address byte leads every frame")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        CHECK(m.data[0] == 0xF1);          // our tx address extension
+        e.reply(0x7E8, {0x10, 0x03, 0x62, 0xF1, 0x90});
+    };
+    UdsTarget t = engine;
+    t.tx_ae = 0xF1;
+    t.rx_ae = 0x10;
+    const Bytes req = {0x22, 0xF1, 0x90};
+    const UdsResult r = uds_request(ecu.client, ecu.send(), t, req, quick);
+    REQUIRE(r.error.empty());
+    CHECK(r.response == Bytes{0x62, 0xF1, 0x90});
+    CHECK(ecu.sent[0].data[0] == 0xF1);
+    CHECK(ecu.sent[0].data[1] == 0x03);    // single frame PCI after the address byte
+    ecu.on_frame = [](Ecu& e, const BusMessage&) { e.reply(0x7E8, {0x99, 0x03, 0x62, 0xF1, 0x90}); };
+    CHECK(uds_request(ecu.client, ecu.send(), t, req, quick).error.starts_with("no response"));
+}
+
+TEST_CASE("address extension keeps every byte: 7-byte single frame and a segmented request")
+{
+    Ecu ecu;
+    std::vector<BusMessage> seen;
+    ecu.on_frame = [&seen](Ecu& e, const BusMessage& m)
+    {
+        seen.push_back(m);
+        if ((m.data[1] >> 4) == 1) // our first frame (after the address byte): clear to send
+        {
+            e.reply(0x7E8, {0x10, 0x30, 0x00, 0x00});
+        }
+        else if ((m.data[1] >> 4) == 0 || (m.data[1] >> 4) == 2)
+        {
+            e.reply(0x7E8, {0x10, 0x02, 0x6E, 0x00});
+        }
+    };
+    UdsTarget t = engine;
+    t.tx_ae = 0xF1;
+    t.rx_ae = 0x10;
+    // 6 bytes fit one frame with the address byte (AE + PCI + 6 = 8); the 7th byte must not be lost.
+    const Bytes six = {0x2E, 0x01, 0x02, 0x03, 0x04, 0x05};
+    CHECK(uds_request(ecu.client, ecu.send(), t, six, quick).error.empty());
+    REQUIRE(seen.size() == 1);
+    CHECK(seen[0].data[1] == 0x06);
+    CHECK(seen[0].data[7] == 0x05); // last payload byte present
+    seen.clear();
+    // 7 bytes no longer fit: first frame (5 bytes) + one consecutive frame (2 bytes).
+    const Bytes seven = {0x2E, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+    CHECK(uds_request(ecu.client, ecu.send(), t, seven, quick).error.empty());
+    REQUIRE(seen.size() == 2);
+    CHECK(seen[0].data[1] == 0x10);
+    CHECK(seen[0].data[2] == 0x07);
+    CHECK(seen[0].data[7] == 0x04); // FF carries 5 bytes: 2E 01 02 03 04
+    CHECK(seen[1].data[1] == 0x21);
+    CHECK(seen[1].data[2] == 0x05);
+    CHECK(seen[1].data[3] == 0x06); // nothing dropped
+    // Functional: 7 bytes with an address byte do not fit a single frame -> refused, nothing sent.
+    seen.clear();
+    UdsTarget fn = t;
+    fn.tx_id = 0x7DF;
+    CHECK(uds_functional(ecu.client, ecu.send(), fn, seven, std::chrono::milliseconds(10)).empty());
+    CHECK(seen.empty());
+}
+
+TEST_CASE("29-bit sweep ignores J1939 traffic and answers to other testers")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        if (m.id == 0x18DA10F1)
+        {
+            e.reply(0x18FEF100, {0x02, 0x7E, 0x00}, true); // J1939 PGN FEF1, looks like a UDS answer
+            e.reply(0x18DAF210, {0x02, 0x7E, 0x00}, true); // answer to tester F2, not us
+            e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true); // the real one
+        }
+    };
+    UdsSweep sw;
+    sw.transport.extended = true;
+    sw.candidates = {0x10};
+    sw.wait = std::chrono::milliseconds(20);
+    const auto found = uds_sweep(ecu.client, ecu.send(), sw);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].rx_id == 0x18DAF110);
+    CHECK(found[0].tx_id == 0x18DA10F1);
+}
+
+TEST_CASE("sweep: 11-bit range finds nodes, stop ends it, 29-bit is exact")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        if (m.id == 0x700) e.reply(0x708, {0x02, 0x7E, 0x00}); // exact: rx = tx + 8
+        if (m.id == 0x701) e.reply(0x790, {0x02, 0x7E, 0x00}); // odd id: guessed pairing
+    };
+    UdsSweep sw;
+    sw.transport.iface = 0;
+    sw.first = 0x700;
+    sw.last = 0x702;
+    sw.wait = std::chrono::milliseconds(20);
+    const auto found = uds_sweep(ecu.client, ecu.send(), sw);
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].rx_id == 0x708);
+    CHECK(found[0].tx_id == 0x700);
+    CHECK(!found[0].guessed);
+    CHECK(found[1].rx_id == 0x790);
+    CHECK(found[1].guessed);
+
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        if (m.id == 0x18DA10F1) e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true);
+    };
+    UdsSweep sw29;
+    sw29.transport.extended = true;
+    sw29.candidates = {0x10, 0x11};
+    sw29.wait = std::chrono::milliseconds(20);
+    const auto f29 = uds_sweep(ecu.client, ecu.send(), sw29);
+    REQUIRE(f29.size() == 1);
+    CHECK(f29[0].tx_id == 0x18DA10F1);
+    CHECK(f29[0].rx_id == 0x18DAF110);
+    CHECK(!f29[0].guessed);
+
+    std::atomic<bool> stop{true};
+    CHECK(uds_sweep(ecu.client, ecu.send(), sw, {}, &stop).empty());
+}
+
+TEST_CASE("service scan: not-supported vs supported")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        const uint8_t sid = m.data[1];
+        if (sid == 0x22) e.reply(0x7E8, {0x03, 0x62, 0x00, 0x00});
+        else if (sid == 0x27) e.reply(0x7E8, {0x03, 0x7F, 0x27, 0x33});
+        else e.reply(0x7E8, {0x03, 0x7F, sid, 0x11});
+    };
+    const auto probes = uds_service_scan(ecu.client, ecu.send(), engine, quick);
+    const auto by = [&](uint8_t s) { return *std::ranges::find(probes, s, &UdsServiceProbe::sid); };
+    CHECK(by(0x22).supported());
+    CHECK(by(0x27).supported());
+    CHECK(!by(0x10).supported());
+    CHECK(by(0x10).answered);
+}
+
+TEST_CASE("DID scan collects positive answers, skips out-of-range")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        const uint16_t did = static_cast<uint16_t>(m.data[2] << 8 | m.data[3]);
+        if (did == 0xF190) e.reply(0x7E8, {0x06, 0x62, 0xF1, 0x90, 'A', 'B', 'C'});
+        else e.reply(0x7E8, {0x03, 0x7F, 0x22, 0x31});
+    };
+    const auto dids = uds_did_scan(ecu.client, ecu.send(), engine, 0xF18F, 0xF191, quick);
+    REQUIRE(dids.size() == 1);
+    CHECK(dids[0].did == 0xF190);
+    CHECK(dids[0].data == Bytes{'A', 'B', 'C'});
+}
+
+TEST_CASE("DID and service names in descriptions")
+{
+    CHECK(uds_did_name(0xF190) == "VIN");
+    CHECK(uds_describe_request(Bytes{0x22, 0xF1, 0x90}) == "ReadDataByIdentifier F190 VIN");
+    CHECK(uds_describe(Bytes{0x22, 0xF1, 0x90}, Bytes{0x62, 0xF1, 0x90, 'X'}).starts_with("DID F190 VIN = 58"));
+    CHECK(uds_describe({}, Bytes{0x59, 0x01, 0xFF, 0x01, 0x00, 0x05}) == "DTC count 5");
 }
 
 TEST_CASE("learning: 11-bit pairs, functional guesses refined, 29-bit from the answer")

@@ -37,6 +37,7 @@
 
 #include "app.h"
 #include "core/autosar_e2e.h"
+#include "decoders/decoders.h"
 #include "core/log.h"
 #include "core/platform.h"
 #include "core/trace_file_format.h"
@@ -646,13 +647,31 @@ PYBIND11_EMBEDDED_MODULE(kraken, m)
 
     // --- UDS (ISO 14229 over ISO-TP; decoders/uds_client.h) ---
 
-    m.def("uds_request", [](const py::bytes& data, uint32_t tx_id, uint32_t rx_id, bool extended,
-                            std::optional<uint16_t> iface_arg, double timeout) -> py::bytes
+    const auto uds_target = [](uint32_t tx_id, uint32_t rx_id, bool extended, std::optional<uint16_t> iface_arg,
+                               bool fd, bool brs, std::optional<int> tx_ae, std::optional<int> rx_ae, int padding)
     {
-        const UdsTarget t{.iface = send_iface(iface_arg), .tx_id = tx_id, .rx_id = rx_id, .extended = extended};
+        UdsTarget t{.iface = send_iface(iface_arg), .tx_id = tx_id, .rx_id = rx_id, .extended = extended,
+                    .padding = static_cast<uint8_t>(padding), .fd = fd, .brs = brs, .tx_len = 64};
+        if (tx_ae)
+        {
+            t.tx_ae = static_cast<uint8_t>(*tx_ae);
+        }
+        if (rx_ae)
+        {
+            t.rx_ae = static_cast<uint8_t>(*rx_ae);
+        }
+        return t;
+    };
+
+    m.def("uds_request", [uds_target](const py::bytes& data, uint32_t tx_id, uint32_t rx_id, bool extended,
+                            std::optional<uint16_t> iface_arg, double timeout, bool fd, bool brs,
+                            std::optional<int> tx_ae, std::optional<int> rx_ae, int padding, double p2_star) -> py::bytes
+    {
+        const UdsTarget t = uds_target(tx_id, rx_id, extended, iface_arg, fd, brs, tx_ae, rx_ae, padding);
         const std::string req = data;
         UdsTiming timing;
         timing.p2 = std::chrono::milliseconds(static_cast<int64_t>(timeout * 1000.0));
+        timing.p2_star = std::chrono::milliseconds(static_cast<int64_t>(p2_star * 1000.0));
         UdsResult r;
         {
             py::gil_scoped_release release;
@@ -671,34 +690,137 @@ PYBIND11_EMBEDDED_MODULE(kraken, m)
         return {reinterpret_cast<const char*>(r.response.data()), r.response.size()};
     }, "Send a UDS request (bytes, SID first) to tx_id and return the ECU's response from rx_id: "
        "positive (SID + 0x40, ...) or negative (0x7F, SID, NRC). Segments long requests and reassembles "
-       "long responses (ISO-TP flow control), waits through NRC 0x78 'response pending'. Returns b'' "
-       "when the suppress-positive-response bit is set. Raises TimeoutError without an answer within "
+       "long responses (ISO-TP flow control, CAN FD when fd=True), waits through NRC 0x78 'response "
+       "pending'. tx_ae / rx_ae give the leading address byte for extended / mixed addressing. Returns "
+       "b'' when the suppress-positive-response bit is set. Raises TimeoutError without an answer within "
        "`timeout` seconds and RuntimeError when the interface is not open.",
        py::arg("data"), py::arg("tx_id") = 0x7E0, py::arg("rx_id") = 0x7E8, py::arg("extended") = false,
-       py::arg("interface_id") = py::none(), py::arg("timeout") = 1.0);
+       py::arg("interface_id") = py::none(), py::arg("timeout") = 1.0, py::arg("fd") = false, py::arg("brs") = false,
+       py::arg("tx_ae") = py::none(), py::arg("rx_ae") = py::none(), py::arg("padding") = 0xCC,
+       py::arg("p2_star") = 5.0);
 
-    m.def("uds_scan", [](std::optional<uint16_t> iface_arg)
+    const auto ecu_dict = [](const UdsEcu& e)
+    {
+        py::dict d;
+        d["tx_id"] = e.tx_id;
+        d["rx_id"] = e.rx_id;
+        d["extended"] = e.extended;
+        d["guessed"] = e.guessed;
+        return d;
+    };
+
+    m.def("uds_scan", [ecu_dict](std::optional<uint16_t> iface_arg, std::optional<bool> physical,
+                                 std::optional<bool> extended, uint32_t first, uint32_t last,
+                                 const std::vector<uint8_t>& candidates, uint8_t tester, double wait)
     {
         const uint16_t interface_id = send_iface(iface_arg);
         std::vector<py::dict> out;
         std::vector<UdsEcu> found;
+        const auto w = std::chrono::milliseconds(static_cast<int64_t>(wait * 1000.0));
         {
             py::gil_scoped_release release;
-            found = uds_scan(g_app->uds_client, python_uds_send, interface_id, std::chrono::milliseconds(300));
+            if (physical.value_or(false))
+            {
+                for (const bool ext : {false, true})
+                {
+                    if (extended && *extended != ext)
+                    {
+                        continue;
+                    }
+                    UdsSweep s;
+                    s.transport = {.iface = interface_id, .extended = ext};
+                    s.first = first;
+                    s.last = last;
+                    s.tester = tester;
+                    s.candidates = candidates;
+                    s.wait = w;
+                    const auto f = uds_sweep(g_app->uds_client, python_uds_send, s);
+                    found.insert(found.end(), f.begin(), f.end());
+                }
+            }
+            else
+            {
+                found = uds_scan(g_app->uds_client, python_uds_send, interface_id,
+                                 w.count() ? w : std::chrono::milliseconds(300));
+            }
         }
         for (const UdsEcu& e : found)
         {
+            out.push_back(ecu_dict(e));
+        }
+        return out;
+    }, "Find ECUs. Default: functional TesterPresent to 0x7DF and 0x18DB33F1. physical=True instead "
+       "sweeps every physical id (11-bit first..last, or 29-bit 0x18DA<node><tester> for each candidate "
+       "node, empty = all 256). One dict per ECU: tx_id, rx_id, extended, guessed.",
+       py::arg("interface_id") = py::none(), py::arg("physical") = py::none(), py::arg("extended") = py::none(),
+       py::arg("first") = 0x700, py::arg("last") = 0x7FF, py::arg("candidates") = std::vector<uint8_t>{},
+       py::arg("tester") = 0xF1, py::arg("wait") = 0.0);
+
+    m.def("uds_service_scan", [uds_target](uint32_t tx_id, uint32_t rx_id, bool extended,
+                                           std::optional<uint16_t> iface_arg, double timeout)
+    {
+        const UdsTarget t = uds_target(tx_id, rx_id, extended, iface_arg, false, false, std::nullopt, std::nullopt, 0xCC);
+        UdsTiming timing;
+        timing.p2 = std::chrono::milliseconds(static_cast<int64_t>(timeout * 1000.0));
+        std::vector<UdsServiceProbe> probes;
+        {
+            py::gil_scoped_release release;
+            probes = uds_service_scan(g_app->uds_client, python_uds_send, t, timing);
+        }
+        std::vector<py::dict> out;
+        for (const UdsServiceProbe& p : probes)
+        {
+            if (!p.supported())
+            {
+                continue;
+            }
             py::dict d;
-            d["tx_id"] = e.tx_id;
-            d["rx_id"] = e.rx_id;
-            d["extended"] = e.extended;
-            d["guessed"] = e.guessed;
+            d["sid"] = p.sid;
+            d["name"] = uds_service_name(p.sid);
             out.push_back(d);
         }
         return out;
-    }, "Functional TesterPresent to 0x7DF and 0x18DB33F1; one dict per ECU that answered: tx_id, "
-       "rx_id, extended, guessed (11-bit tx_id taken as rx_id - 8).",
-       py::arg("interface_id") = py::none());
+    }, "Which services an ECU supports: one dict (sid, name) per supported service.",
+       py::arg("tx_id") = 0x7E0, py::arg("rx_id") = 0x7E8, py::arg("extended") = false,
+       py::arg("interface_id") = py::none(), py::arg("timeout") = 0.3);
+
+    m.def("uds_did_scan", [uds_target](uint32_t first, uint32_t last, uint32_t tx_id, uint32_t rx_id, bool extended,
+                                       std::optional<uint16_t> iface_arg, double timeout)
+    {
+        const UdsTarget t = uds_target(tx_id, rx_id, extended, iface_arg, false, false, std::nullopt, std::nullopt, 0xCC);
+        UdsTiming timing;
+        timing.p2 = std::chrono::milliseconds(static_cast<int64_t>(timeout * 1000.0));
+        std::vector<UdsDidValue> dids;
+        {
+            py::gil_scoped_release release;
+            dids = uds_did_scan(g_app->uds_client, python_uds_send, t, static_cast<uint16_t>(first),
+                                static_cast<uint16_t>(last), timing);
+        }
+        std::vector<py::dict> out;
+        for (const UdsDidValue& v : dids)
+        {
+            py::dict d;
+            d["did"] = v.did;
+            d["name"] = std::string(uds_did_name(v.did));
+            d["data"] = py::bytes(reinterpret_cast<const char*>(v.data.data()), v.data.size());
+            out.push_back(d);
+        }
+        return out;
+    }, "ReadDataByIdentifier over a DID range; one dict (did, name, data bytes) per positive answer.",
+       py::arg("first") = 0xF180, py::arg("last") = 0xF1FF, py::arg("tx_id") = 0x7E0, py::arg("rx_id") = 0x7E8,
+       py::arg("extended") = false, py::arg("interface_id") = py::none(), py::arg("timeout") = 0.3);
+
+    m.def("uds_describe", [](const py::bytes& request, const py::bytes& response)
+    {
+        const std::string rq = request;
+        const std::string rs = response;
+        return uds_describe(std::span(reinterpret_cast<const uint8_t*>(rq.data()), rq.size()),
+                            std::span(reinterpret_cast<const uint8_t*>(rs.data()), rs.size()));
+    }, "Readable text for a UDS response (DID / DTC / NRC names).",
+       py::arg("request"), py::arg("response"));
+
+    m.def("uds_did_name", [](uint16_t did) { return std::string(uds_did_name(did)); },
+          "ISO 14229-1 name of a standard data identifier (empty if not standard).", py::arg("did"));
 
     // --- Trace access (main thread) ---
 

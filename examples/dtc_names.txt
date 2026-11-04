@@ -1,0 +1,7 @@
+# DTC text file for the UDS Diagnostics window (Services > DTC text > Load).
+# One "<hex trouble code> <description>" per line; the code is the 3-byte DTC as the ECU
+# reports it in 19 02 / 19 0A (an optional 0x prefix is fine). Lines starting with # are ignored.
+# These codes match examples/uds_ecu_sim.py.
+F00016 Engine oil pressure too low
+F00041 Coolant temperature high
+F00043 Throttle position sensor fault

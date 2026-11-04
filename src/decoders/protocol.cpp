@@ -40,7 +40,7 @@ DecodeStatus protocol_decode(ProtocolDecoder& d, const BusMessage& frame, Protoc
         if ((frame.id == 0x3C || frame.id == 0x3D) && frame.len >= 3)
         {
             BusMessage synthetic{.flags = static_cast<uint16_t>(frame.flags & bus_flag::tx),
-                                 .iface = frame.iface, .ts_ns = frame.ts_ns};
+                                 .iface = frame.iface, .type = BusType::LIN, .ts_ns = frame.ts_ns};
             const int n = std::min<int>(frame.len, bus_max_data_bytes) - 1;
             std::copy_n(frame.data.begin() + 1, n, synthetic.data.begin());
             set_length(synthetic, n);

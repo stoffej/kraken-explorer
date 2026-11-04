@@ -86,6 +86,14 @@ void draw_settings_dialog(App& app, SettingsDialogState& s)
     ImGui::Checkbox("CANblaster (UDP) driver", &s.canblaster);
     ImGui::SetItemTooltip("Applies on Measurement > Reload Interfaces. Enumeration waits 2 s for servers.");
 
+    ImGui::SeparatorText("Diagnostics");
+    if (ImGui::Checkbox("UDS extended addressing", &app.settings.uds_addr_ext))
+    {
+        ImGui::MarkIniSettingsDirty();
+    }
+    ImGui::SetItemTooltip("Decode ISO-TP with a leading address byte (N_TA / N_AE) in the trace's UDS view.\n"
+                          "Turn on only for buses that use extended / mixed addressing.");
+
     ImGui::SeparatorText("Updates");
     if (ImGui::Checkbox("Check for updates", &app.settings.update_check)) // applies at once, like the shortcuts
     {

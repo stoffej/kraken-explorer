@@ -380,6 +380,7 @@ void process_frame(TraceWindowState& s, const App& app, uint64_t index)
     }
 
     ProtocolMessage pm;
+    s.decoder.uds.addr_ext = app.settings.uds_addr_ext; // cheap; survives protocol_reset
     if (protocol_decode(s.decoder, m, pm) == DecodeStatus::Completed)
     {
         if (is_protocol(pm, "uds"))

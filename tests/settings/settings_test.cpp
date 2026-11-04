@@ -80,6 +80,41 @@ TEST_CASE("ini section round trip")
     check(b);
 }
 
+TEST_CASE("UDS transport and named ECUs round trip")
+{
+    App a;
+    a.settings.uds_addr_ext = true;
+    a.uds.fd = true;
+    a.uds.tx_len_idx = 7;
+    a.uds.padding = "AA";
+    a.uds.p2 = "2000";
+    uds_learner_add(a.uds.learner, {.iface = 0, .extended = true, .tx_id = 0x18DA10F1, .rx_id = 0x18DAF110, .name = "PCU"});
+    uds_learner_add(a.uds.learner, {.iface = 0, .tx_id = 0x7E0, .rx_id = 0x7E8}); // unnamed: not persisted
+    std::string ini;
+    settings_ini_write(a, ini);
+    CHECK(ini.find("uds/addr_ext=1\n") != std::string::npos);
+    CHECK(ini.find("uds/ecu=0 1 18DA10F1 18DAF110 PCU\n") != std::string::npos);
+    CHECK(ini.find("18DAF110 7E0") == std::string::npos); // the unnamed one is absent
+
+    App b;
+    size_t pos = 0;
+    while (pos < ini.size())
+    {
+        const size_t nl = ini.find('\n', pos);
+        settings_ini_read_line(b, std::string_view(ini).substr(pos, nl - pos));
+        pos = nl + 1;
+    }
+    CHECK(b.settings.uds_addr_ext);
+    CHECK(b.uds.fd);
+    CHECK(b.uds.tx_len_idx == 7);
+    CHECK(b.uds.padding == "AA");
+    CHECK(b.uds.p2 == "2000");
+    REQUIRE(b.uds.learner.ecus.size() == 1);
+    CHECK(b.uds.learner.ecus[0].name == "PCU");
+    CHECK(b.uds.learner.ecus[0].tx_id == 0x18DA10F1);
+    CHECK(b.uds.learner.ecus[0].extended);
+}
+
 TEST_CASE("text size: default 110 %, round trip")
 {
     App a;

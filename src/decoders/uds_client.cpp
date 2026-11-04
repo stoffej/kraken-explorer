@@ -20,6 +20,7 @@
 #include "decoders/uds_client.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <optional>
 #include <thread>
@@ -34,6 +35,11 @@ using Clock = std::chrono::steady_clock;
 constexpr int64_t pairing_window_ns = 2'000'000'000; // an 11-bit answer belongs to a request this recent
 constexpr std::size_t max_pending = 32;
 constexpr int max_fc_wait = 10; // N_WFTmax: flow control WAITs in a row before giving up
+
+// The SIDs ISO 14229-1 assigns to requests.
+constexpr std::array<uint8_t, 27> request_sids = {
+    0x10, 0x11, 0x14, 0x19, 0x22, 0x23, 0x24, 0x27, 0x28, 0x29, 0x2A, 0x2C, 0x2E, 0x2F,
+    0x31, 0x34, 0x35, 0x36, 0x37, 0x38, 0x3D, 0x3E, 0x83, 0x84, 0x85, 0x86, 0x87};
 
 bool functional_id(const UdsTarget& t)
 {
@@ -56,15 +62,24 @@ bool has_suppress_bit(uint8_t sid)
 // The SIDs ISO 14229-1 assigns; anything else in a first byte is not a UDS request.
 bool is_request_sid(uint8_t sid)
 {
-    switch (sid)
+    return std::ranges::find(request_sids, sid) != request_sids.end();
+}
+
+// Smallest frame length (CAN FD step, or 8) that holds `used` bytes on a target.
+int pad_len(const UdsTarget& t, int used)
+{
+    if (!t.fd)
     {
-    case 0x10: case 0x11: case 0x14: case 0x19: case 0x22: case 0x23: case 0x24: case 0x27: case 0x28:
-    case 0x29: case 0x2A: case 0x2C: case 0x2E: case 0x2F: case 0x31: case 0x34: case 0x35: case 0x36:
-    case 0x37: case 0x38: case 0x3D: case 0x3E: case 0x83: case 0x84: case 0x85: case 0x86: case 0x87:
-        return true;
-    default:
-        return false;
+        return 8;
     }
+    const int cap = std::clamp<int>(t.tx_len, 8, bus_max_data_bytes);
+    return std::min<int>(bus_dlc_lengths[bus_length_to_dlc(used)], cap);
+}
+
+// Largest ISO-TP frame this target sends (classic 8, else the chosen CAN FD length).
+int frame_cap(const UdsTarget& t)
+{
+    return t.fd ? std::clamp<int>(t.tx_len, 8, bus_max_data_bytes) : 8;
 }
 
 // Registered for its lifetime, so a reply that comes before the request call returns from
@@ -102,22 +117,89 @@ struct WaiterScope
     }
 };
 
-BusMessage frame_for(const UdsTarget& t, uint32_t id)
+// A frame on `id` carrying `bytes` (already including the ISO-TP PCI and any address extension
+// byte), padded to a legal length with the target's padding byte.
+BusMessage make_frame(const UdsTarget& t, uint32_t id, std::span<const uint8_t> bytes)
 {
     BusMessage m{};
     m.id = id;
     m.iface = t.iface;
-    m.flags = t.extended ? bus_flag::extended : 0;
-    set_length(m, 8);
+    m.flags = static_cast<uint16_t>((t.extended ? bus_flag::extended : 0)
+                                    | (t.fd ? bus_flag::fd : 0) | (t.fd && t.brs ? bus_flag::brs : 0));
+    const int cap = frame_cap(t);
+    const int n = std::min<int>(static_cast<int>(bytes.size()), cap);
     m.data.fill(t.padding);
+    std::copy_n(bytes.begin(), n, m.data.begin());
+    set_length(m, pad_len(t, n));
     return m;
 }
 
-bool send_frame(const UdsSend& send, const UdsTarget& t, std::span<const uint8_t> bytes)
+// Prepends the address extension byte (when the target uses one) to an ISO-TP PDU and sends it.
+bool send_pdu(const UdsSend& send, const UdsTarget& t, uint32_t id, std::span<const uint8_t> pdu)
 {
-    BusMessage m = frame_for(t, t.tx_id);
-    std::ranges::copy(bytes.first(std::min<std::size_t>(bytes.size(), 8)), m.data.begin());
-    return send(m);
+    if (!t.tx_ae)
+    {
+        return send(make_frame(t, id, pdu));
+    }
+    std::array<uint8_t, bus_max_data_bytes> buf{};
+    buf[0] = *t.tx_ae;
+    const int n = std::min<int>(static_cast<int>(pdu.size()), bus_max_data_bytes - 1);
+    std::copy_n(pdu.begin(), n, buf.begin() + 1);
+    return send(make_frame(t, id, std::span(buf).first(n + 1)));
+}
+
+// The ISO-TP bytes of a received frame (past the address extension byte), and its length.
+std::span<const uint8_t> tp_bytes(const UdsTarget& t, const BusMessage& m)
+{
+    const int off = t.rx_ae ? 1 : 0;
+    const int len = std::min<int>(m.len, bus_max_data_bytes);
+    if (len <= off)
+    {
+        return {};
+    }
+    return std::span<const uint8_t>(m.data.data() + off, static_cast<std::size_t>(len - off));
+}
+
+// First UDS byte of an ISO-TP single or first frame (nullopt for CF / FC / anything else).
+// ae is the number of address-extension bytes leading the frame (0 or 1).
+std::optional<std::span<const uint8_t>> first_payload(const BusMessage& m, int ae = 0)
+{
+    const int len = std::min<int>(m.len, bus_max_data_bytes) - ae;
+    const uint8_t* p = m.data.data() + ae;
+    if (len < 2)
+    {
+        return std::nullopt;
+    }
+    const uint8_t pci = p[0] >> 4;
+    if (pci == 0)
+    {
+        int n = p[0] & 0x0F;
+        int off = 1;
+        if (n == 0 && len > 1) // CAN FD long single frame
+        {
+            n = p[1];
+            off = 2;
+        }
+        if (n < 1 || n > len - off)
+        {
+            return std::nullopt;
+        }
+        return std::span<const uint8_t>(p + off, static_cast<std::size_t>(n));
+    }
+    if (pci == 1 && len >= 3)
+    {
+        int off = 2;
+        if ((p[0] & 0x0F) == 0 && p[1] == 0 && len >= 6) // CAN FD long first frame
+        {
+            off = 6;
+        }
+        if (off >= len)
+        {
+            return std::nullopt;
+        }
+        return std::span<const uint8_t>(p + off, static_cast<std::size_t>(len - off));
+    }
+    return std::nullopt;
 }
 
 // STmin byte of a flow control (ISO 15765-2): 0..0x7F ms, 0xF1..0xF9 100..900 us, else 127 ms.
@@ -132,31 +214,6 @@ std::chrono::microseconds st_min(uint8_t v)
         return std::chrono::microseconds((v - 0xF0) * 100);
     }
     return std::chrono::milliseconds(127);
-}
-
-// First UDS byte of an ISO-TP single or first frame (nullopt for CF / FC / anything else).
-std::optional<std::span<const uint8_t>> first_payload(const BusMessage& m)
-{
-    const int len = std::min<int>(m.len, 8);
-    if (len < 2)
-    {
-        return std::nullopt;
-    }
-    const uint8_t pci = m.data[0] >> 4;
-    if (pci == 0)
-    {
-        const int n = m.data[0] & 0x0F;
-        if (n < 1 || n > len - 1)
-        {
-            return std::nullopt;
-        }
-        return std::span<const uint8_t>(m.data.data() + 1, static_cast<std::size_t>(n));
-    }
-    if (pci == 1 && len >= 3)
-    {
-        return std::span<const uint8_t>(m.data.data() + 2, static_cast<std::size_t>(len - 2));
-    }
-    return std::nullopt;
 }
 
 } // namespace
@@ -181,11 +238,16 @@ void uds_client_rx(void* client, const BusMessage& msg)
         const std::scoped_lock lock(c.mutex);
         for (UdsWaiter* w : c.waiters)
         {
-            if (w->iface == msg.iface && w->extended == ext && (w->any_id || w->id == can_id(msg)))
+            if (w->iface != msg.iface || w->extended != ext || !(w->any_id || w->id == can_id(msg)))
             {
-                w->frames.push_back(msg);
-                queued = true;
+                continue;
             }
+            if (w->ae && (msg.len < 1 || msg.data[0] != *w->ae))
+            {
+                continue;
+            }
+            w->frames.push_back(msg);
+            queued = true;
         }
     }
     if (queued)
@@ -204,15 +266,34 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
         return r;
     }
     const uint8_t sid = request[0];
+    // ISO-TP bytes a frame can carry: the whole frame, minus the address extension byte that
+    // send_pdu puts in front (without this a 7-byte request with tx_ae lost its last byte).
+    const int cap = frame_cap(t) - (t.tx_ae ? 1 : 0);
+    const int ro = t.rx_ae ? 1 : 0;               // address-extension offset on received frames
     const auto send_error = [&t] { return std::format("interface {} not open or send failed", t.iface); };
-    WaiterScope scope(c, {.iface = t.iface, .extended = t.extended, .id = t.rx_id});
+    WaiterScope scope(c, {.iface = t.iface, .extended = t.extended, .id = t.rx_id, .ae = t.rx_ae});
 
-    if (request.size() <= 7)
+    // Largest single frame payload: classic 1-byte PCI, FD long form uses a 2-byte PCI.
+    const int sf_small = cap - 1;
+    if (static_cast<int>(request.size()) <= sf_small && request.size() <= 7)
     {
-        std::array<uint8_t, 8> sf{};
+        std::array<uint8_t, bus_max_data_bytes> sf{};
         sf[0] = static_cast<uint8_t>(request.size());
-        std::ranges::copy(request, sf.begin() + 1);
-        if (!send_frame(send, t, std::span(sf).first(request.size() + 1)))
+        std::copy(request.begin(), request.end(), sf.begin() + 1);
+        if (!send_pdu(send, t, t.tx_id, std::span(sf).first(request.size() + 1)))
+        {
+            r.error = send_error();
+            return r;
+        }
+    }
+    else if (t.fd && static_cast<int>(request.size()) <= cap - 2)
+    {
+        // CAN FD long single frame: 0x00, length, payload.
+        std::array<uint8_t, bus_max_data_bytes> sf{};
+        sf[0] = 0x00;
+        sf[1] = static_cast<uint8_t>(request.size());
+        std::copy(request.begin(), request.end(), sf.begin() + 2);
+        if (!send_pdu(send, t, t.tx_id, std::span(sf).first(request.size() + 2)))
         {
             r.error = send_error();
             return r;
@@ -220,16 +301,17 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
     }
     else
     {
-        std::array<uint8_t, 8> ff{};
+        std::array<uint8_t, bus_max_data_bytes> ff{};
         ff[0] = static_cast<uint8_t>(0x10 | (request.size() >> 8));
         ff[1] = static_cast<uint8_t>(request.size() & 0xFF);
-        std::ranges::copy(request.first(6), ff.begin() + 2);
-        if (!send_frame(send, t, ff))
+        const int first = std::min<int>(cap - 2, static_cast<int>(request.size()));
+        std::copy_n(request.begin(), first, ff.begin() + 2);
+        if (!send_pdu(send, t, t.tx_id, std::span(ff).first(first + 2)))
         {
             r.error = send_error();
             return r;
         }
-        std::size_t at = 6;
+        std::size_t at = static_cast<std::size_t>(first);
         uint8_t sn = 1;
         while (at < request.size())
         {
@@ -245,11 +327,12 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
                     r.error = c.cancel.load() ? "cancelled" : "no flow control from the ECU (N_Bs)";
                     return r;
                 }
-                if (m->len < 3 || (m->data[0] >> 4) != 3)
+                const std::span<const uint8_t> fcb = tp_bytes(t, *m);
+                if (fcb.size() < 3 || (fcb[0] >> 4) != 3)
                 {
                     continue;
                 }
-                const uint8_t fs = m->data[0] & 0x0F;
+                const uint8_t fs = fcb[0] & 0x0F;
                 if (fs == 1)
                 {
                     if (++waits > max_fc_wait)
@@ -265,17 +348,17 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
                     r.error = "the ECU refused the request size (flow control overflow)";
                     return r;
                 }
-                block = m->data[1];
-                gap = st_min(m->data[2]);
+                block = fcb[1];
+                gap = st_min(fcb[2]);
                 break;
             }
             for (int sent = 0; at < request.size() && (block == 0 || sent < block); ++sent)
             {
-                std::array<uint8_t, 8> cf{};
+                std::array<uint8_t, bus_max_data_bytes> cf{};
                 cf[0] = static_cast<uint8_t>(0x20 | sn);
-                const std::size_t n = std::min<std::size_t>(7, request.size() - at);
-                std::ranges::copy(request.subspan(at, n), cf.begin() + 1);
-                if (!send_frame(send, t, std::span(cf).first(n + 1)))
+                const std::size_t n = std::min<std::size_t>(static_cast<std::size_t>(cap - 1), request.size() - at);
+                std::copy_n(request.begin() + at, n, cf.begin() + 1);
+                if (!send_pdu(send, t, t.tx_id, std::span(cf).first(n + 1)))
                 {
                     r.error = send_error();
                     return r;
@@ -307,18 +390,37 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
                                                     pending ? " after response pending" : "");
             return r;
         }
-        const int len = std::min<int>(m->len, 8);
-        const uint8_t pci = m->data[0] >> 4;
+        const int len = std::min<int>(m->len, bus_max_data_bytes) - ro;
+        if (len < 1)
+        {
+            continue;
+        }
+        const uint8_t* b = m->data.data() + ro;
+        const uint8_t pci = b[0] >> 4;
         std::vector<uint8_t> payload;
         if (pci == 0)
         {
-            const int n = std::min(m->data[0] & 0x0F, len - 1);
-            payload.assign(m->data.begin() + 1, m->data.begin() + 1 + std::max(n, 0));
+            int n = b[0] & 0x0F;
+            int off = 1;
+            if (n == 0 && len > 1) // CAN FD long single frame
+            {
+                n = b[1];
+                off = 2;
+            }
+            n = std::min(n, len - off);
+            payload.assign(b + off, b + off + std::max(n, 0));
         }
-        else if (pci == 1 && len == 8)
+        else if (pci == 1 && len >= 3)
         {
-            const std::size_t size = static_cast<std::size_t>((m->data[0] & 0x0F) << 8 | m->data[1]);
-            if (size <= 7)
+            std::size_t size = static_cast<std::size_t>((b[0] & 0x0F) << 8 | b[1]);
+            int off = 2;
+            if ((b[0] & 0x0F) == 0 && b[1] == 0 && len >= 6) // CAN FD long first frame: 32-bit length
+            {
+                size = (static_cast<std::size_t>(b[2]) << 24) | (static_cast<std::size_t>(b[3]) << 16)
+                       | (static_cast<std::size_t>(b[4]) << 8) | b[5];
+                off = 6;
+            }
+            if (size <= static_cast<std::size_t>(len - off))
             {
                 continue; // not a valid first frame
             }
@@ -328,10 +430,10 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
                 r.error = "multi-frame response to a functional request: use the ECU's physical request id";
                 return r;
             }
-            payload.assign(m->data.begin() + 2, m->data.begin() + 8);
+            payload.assign(b + off, b + len);
             // Clear to send everything, no gap: the tester reads as fast as frames come.
             const std::array<uint8_t, 3> fc = {0x30, 0x00, 0x00};
-            if (!send_frame(send, t, fc))
+            if (!send_pdu(send, t, t.tx_id, fc))
             {
                 r.error = send_error();
                 return r;
@@ -345,17 +447,23 @@ UdsResult uds_request(UdsClient& c, const UdsSend& send, const UdsTarget& t, std
                     r.error = std::format("response cut off after {} of {} bytes (N_Cr)", payload.size(), size);
                     return r;
                 }
-                if ((cf->data[0] >> 4) != 2)
+                const int clen = std::min<int>(cf->len, bus_max_data_bytes) - ro;
+                if (clen < 1)
                 {
                     continue;
                 }
-                if ((cf->data[0] & 0x0F) != sn)
+                const uint8_t* cb = cf->data.data() + ro;
+                if ((cb[0] >> 4) != 2)
                 {
-                    r.error = std::format("consecutive frame {} where {} was expected", cf->data[0] & 0x0F, sn);
+                    continue;
+                }
+                if ((cb[0] & 0x0F) != sn)
+                {
+                    r.error = std::format("consecutive frame {} where {} was expected", cb[0] & 0x0F, sn);
                     return r;
                 }
-                const int n = std::min<int>(std::min<int>(cf->len, 8) - 1, static_cast<int>(size - payload.size()));
-                payload.insert(payload.end(), cf->data.begin() + 1, cf->data.begin() + 1 + std::max(n, 0));
+                const int n = std::min<int>(clen - 1, static_cast<int>(size - payload.size()));
+                payload.insert(payload.end(), cb + 1, cb + 1 + std::max(n, 0));
                 sn = static_cast<uint8_t>((sn + 1) & 0x0F);
             }
         }
@@ -387,16 +495,18 @@ std::vector<UdsResponder> uds_functional(UdsClient& c, const UdsSend& send, cons
                                          std::span<const uint8_t> request, std::chrono::milliseconds window)
 {
     std::vector<UdsResponder> out;
-    if (request.empty() || request.size() > 7)
+    // One single frame: 7 ISO-TP bytes on classic CAN, one fewer with an address extension byte.
+    if (request.empty() || request.size() + (t.tx_ae ? 1 : 0) > 7)
     {
         return out;
     }
     const uint8_t sid = request[0];
-    WaiterScope scope(c, {.iface = t.iface, .extended = t.extended, .any_id = true});
+    const int ae = t.rx_ae ? 1 : 0;
+    WaiterScope scope(c, {.iface = t.iface, .extended = t.extended, .any_id = true, .ae = t.rx_ae});
     std::array<uint8_t, 8> sf{};
     sf[0] = static_cast<uint8_t>(request.size());
-    std::ranges::copy(request, sf.begin() + 1);
-    if (!send_frame(send, t, std::span(sf).first(request.size() + 1)))
+    std::copy(request.begin(), request.end(), sf.begin() + 1);
+    if (!send_pdu(send, t, t.tx_id, std::span(sf).first(request.size() + 1)))
     {
         return out;
     }
@@ -414,8 +524,8 @@ std::vector<UdsResponder> uds_functional(UdsClient& c, const UdsSend& send, cons
         {
             continue;
         }
-        const auto payload = first_payload(*m);
-        if (!payload || (m->data[0] >> 4) != 0)
+        const auto payload = first_payload(*m, ae);
+        if (!payload || ((m->data[ae] >> 4) != 0))
         {
             continue;
         }
@@ -428,19 +538,338 @@ std::vector<UdsResponder> uds_functional(UdsClient& c, const UdsSend& send, cons
     }
 }
 
-std::vector<UdsEcu> uds_scan(UdsClient& c, const UdsSend& send, uint16_t iface, std::chrono::milliseconds window)
+std::vector<UdsEcu> uds_scan(UdsClient& c, const UdsSend& send, uint16_t iface, std::chrono::milliseconds window,
+                             const UdsTarget& transport)
 {
     std::vector<UdsEcu> found;
     const std::array<uint8_t, 2> tester_present = {0x3E, 0x00};
     for (const bool ext : {false, true})
     {
-        const UdsTarget t{.iface = iface, .tx_id = ext ? 0x18DB33F1u : 0x7DFu, .extended = ext};
+        UdsTarget t = transport;
+        t.iface = iface;
+        t.tx_id = ext ? 0x18DB33F1u : 0x7DFu;
+        t.extended = ext;
         for (const UdsResponder& r : uds_functional(c, send, t, tester_present, window))
         {
             found.push_back(uds_ecu_from_responder(t, r.rx_id));
         }
     }
     return found;
+}
+
+std::vector<UdsEcu> uds_sweep(UdsClient& c, const UdsSend& send, const UdsSweep& sweep,
+                              const std::function<void(const UdsEcu&)>& on_found, const std::atomic<bool>* stop)
+{
+    std::vector<UdsEcu> found;
+    const int ae = sweep.transport.rx_ae ? 1 : 0;
+    if (sweep.request.empty() || sweep.request.size() + (sweep.transport.tx_ae ? 1 : 0) > 7)
+    {
+        return found; // the probe must fit one single frame
+    }
+
+    const auto report = [&](const UdsEcu& e)
+    {
+        if (std::ranges::any_of(found, [&](const UdsEcu& f) { return f.rx_id == e.rx_id && f.extended == e.extended; }))
+        {
+            return;
+        }
+        found.push_back(e);
+        if (on_found)
+        {
+            on_found(e);
+        }
+    };
+
+    // Every id tried in turn; one waiter catches answers on any id while we move on.
+    WaiterScope scope(c, {.iface = sweep.transport.iface, .extended = sweep.transport.extended,
+                          .any_id = true, .ae = sweep.transport.rx_ae});
+
+    const auto drain = [&](uint32_t tx_id, Clock::time_point until)
+    {
+        for (;;)
+        {
+            const std::optional<BusMessage> m = scope.next(until);
+            if (!m)
+            {
+                return;
+            }
+            const uint32_t id = can_id(*m);
+            const auto payload = first_payload(*m, ae);
+            if (!payload)
+            {
+                continue;
+            }
+            const uint8_t s = (*payload)[0];
+            const bool uds = s == 0x7F || (s >= 0x40 && is_request_sid(static_cast<uint8_t>(s - 0x40)));
+            if (!uds)
+            {
+                continue;
+            }
+            UdsEcu e{.iface = sweep.transport.iface, .extended = sweep.transport.extended, .rx_id = id};
+            if (sweep.transport.extended)
+            {
+                // Only physical answers to this tester count, 0x18DA<tester><node>: J1939 traffic
+                // on the bus (0x18FExxyy ...) can look like UDS and must not become an ECU.
+                if (((id >> 16) & 0xFF) != 0xDA || ((id >> 8) & 0xFF) != sweep.tester)
+                {
+                    continue;
+                }
+                // The ECU answered on 0x18DA<tester><node>; its request id is 0x18DA<node><tester>.
+                const uint32_t node = id & 0xFF;
+                const uint32_t tester = (id >> 8) & 0xFF;
+                e.tx_id = (id & 0x1FFF0000u) | (node << 8) | tester;
+            }
+            else
+            {
+                // The request went to the id just sent; an answer that is not exactly tx + 8 (the
+                // OBD convention) makes the pairing a guess.
+                e.tx_id = tx_id;
+                e.guessed = id != tx_id + 8;
+            }
+            report(e);
+        }
+    };
+
+    if (sweep.transport.extended)
+    {
+        std::vector<uint8_t> sas = sweep.candidates;
+        if (sas.empty())
+        {
+            sas.resize(256);
+            for (int i = 0; i < 256; ++i)
+            {
+                sas[static_cast<std::size_t>(i)] = static_cast<uint8_t>(i);
+            }
+        }
+        for (const uint8_t sa : sas)
+        {
+            if (stop && stop->load())
+            {
+                break;
+            }
+            UdsTarget t = sweep.transport;
+            t.tx_id = 0x18DA0000u | (static_cast<uint32_t>(sa) << 8) | sweep.tester;
+            (void)send_pdu(send, t, t.tx_id, sweep.request);
+            drain(t.tx_id, Clock::now() + sweep.wait);
+        }
+    }
+    else
+    {
+        for (uint32_t id = sweep.first; id <= sweep.last && id <= can_id_mask_standard; ++id)
+        {
+            if (stop && stop->load())
+            {
+                break;
+            }
+            UdsTarget t = sweep.transport;
+            t.tx_id = id;
+            (void)send_pdu(send, t, id, sweep.request);
+            drain(id, Clock::now() + sweep.wait);
+        }
+    }
+    return found;
+}
+
+std::vector<UdsServiceProbe> uds_service_scan(UdsClient& c, const UdsSend& send, const UdsTarget& t,
+                                              const UdsTiming& timing, const std::atomic<bool>* stop)
+{
+    std::vector<UdsServiceProbe> out;
+    for (const uint8_t sid : request_sids)
+    {
+        if (stop && stop->load())
+        {
+            break;
+        }
+        // The smallest well-formed request: services with a sub-function get 0x00, the rest just the SID.
+        std::vector<uint8_t> req = {sid};
+        if (has_suppress_bit(sid) || sid == 0x22 || sid == 0x2E || sid == 0x2F || sid == 0x14)
+        {
+            req.push_back(0x00);
+        }
+        const UdsResult r = uds_request(c, send, t, req, timing);
+        UdsServiceProbe p{.sid = sid};
+        if (r.error.empty())
+        {
+            p.answered = true;
+            p.nrc = (r.response.size() >= 3 && r.response[0] == 0x7F) ? r.response[2] : 0;
+        }
+        else if (!r.error.starts_with("no response"))
+        {
+            // A transport failure (interface closed) is worth stopping for.
+            break;
+        }
+        out.push_back(p);
+    }
+    return out;
+}
+
+std::vector<UdsDidValue> uds_did_scan(UdsClient& c, const UdsSend& send, const UdsTarget& t, uint16_t first,
+                                      uint16_t last, const UdsTiming& timing,
+                                      const std::function<void(const UdsDidValue&)>& on_found,
+                                      const std::atomic<bool>* stop)
+{
+    std::vector<UdsDidValue> out;
+    for (uint32_t did = first; did <= last; ++did)
+    {
+        if (stop && stop->load())
+        {
+            break;
+        }
+        const std::array<uint8_t, 3> req = {0x22, static_cast<uint8_t>(did >> 8), static_cast<uint8_t>(did)};
+        const UdsResult r = uds_request(c, send, t, req, timing);
+        if (!r.error.empty())
+        {
+            if (!r.error.starts_with("no response"))
+            {
+                break;
+            }
+            continue;
+        }
+        if (r.response.size() >= 4 && r.response[0] == 0x62 && r.response[1] == (did >> 8)
+            && r.response[2] == (did & 0xFF))
+        {
+            UdsDidValue v{.did = static_cast<uint16_t>(did), .data = {r.response.begin() + 3, r.response.end()}};
+            out.push_back(v);
+            if (on_found)
+            {
+                on_found(v);
+            }
+        }
+    }
+    return out;
+}
+
+// --- Text ---
+
+namespace
+{
+
+std::string hex_bytes(std::span<const uint8_t> b)
+{
+    std::string s;
+    for (const uint8_t c : b)
+    {
+        s += std::format("{}{:02X}", s.empty() ? "" : " ", c);
+    }
+    return s;
+}
+
+std::string ascii_bytes(std::span<const uint8_t> b)
+{
+    std::string s;
+    for (const uint8_t c : b)
+    {
+        s += c >= 0x20 && c < 0x7F ? static_cast<char>(c) : '.';
+    }
+    return s;
+}
+
+// DTC status byte (ISO 14229-1 D.2) as the bits that are set.
+std::string dtc_status(uint8_t st)
+{
+    static constexpr std::array<const char*, 8> names = {
+        "testFailed", "testFailedThisCycle", "pending", "confirmed",
+        "testNotCompleteSinceClear", "testFailedSinceClear", "testNotCompleteThisCycle", "warningIndicator"};
+    std::string s;
+    for (int i = 0; i < 8; ++i)
+    {
+        if (st & (1 << i))
+        {
+            s += std::format("{}{}", s.empty() ? "" : "|", names[static_cast<std::size_t>(i)]);
+        }
+    }
+    return s.empty() ? "none" : s;
+}
+
+std::string dtc_list(std::span<const uint8_t> dtcs)
+{
+    std::string s;
+    int n = 0;
+    for (std::size_t i = 0; i + 4 <= dtcs.size(); i += 4, ++n)
+    {
+        // The ISO 15031-6 letter is in the top two bits (P C B U), the rest as digits.
+        const uint8_t hi = dtcs[i];
+        s += std::format("\n  {}{:01X}{:01X}{:02X}-{:02X}  status 0x{:02X} {}", "PCBU"[hi >> 6], (hi >> 4) & 0x3,
+                         hi & 0x0F, dtcs[i + 1], dtcs[i + 2], dtcs[i + 3], dtc_status(dtcs[i + 3]));
+    }
+    return std::format("{} DTC{}{}", n, n == 1 ? "" : "s", s);
+}
+
+} // namespace
+
+std::string_view uds_did_name(uint16_t did)
+{
+    switch (did)
+    {
+    case 0xF180: return "BootSoftwareIdentification";
+    case 0xF181: return "ApplicationSoftwareIdentification";
+    case 0xF182: return "ApplicationDataIdentification";
+    case 0xF183: return "BootSoftwareFingerprint";
+    case 0xF184: return "ApplicationSoftwareFingerprint";
+    case 0xF185: return "ApplicationDataFingerprint";
+    case 0xF186: return "ActiveDiagnosticSession";
+    case 0xF187: return "VehicleManufacturerSparePartNumber";
+    case 0xF188: return "VehicleManufacturerECUSoftwareNumber";
+    case 0xF189: return "VehicleManufacturerECUSoftwareVersionNumber";
+    case 0xF18A: return "SystemSupplierIdentifier";
+    case 0xF18B: return "ECUManufacturingDate";
+    case 0xF18C: return "ECUSerialNumber";
+    case 0xF18D: return "SupportedFunctionalUnits";
+    case 0xF18E: return "VehicleManufacturerKitAssemblyPartNumber";
+    case 0xF190: return "VIN";
+    case 0xF191: return "VehicleManufacturerECUHardwareNumber";
+    case 0xF192: return "SystemSupplierECUHardwareNumber";
+    case 0xF193: return "SystemSupplierECUHardwareVersionNumber";
+    case 0xF194: return "SystemSupplierECUSoftwareNumber";
+    case 0xF195: return "SystemSupplierECUSoftwareVersionNumber";
+    case 0xF196: return "ExhaustRegulationOrTypeApprovalNumber";
+    case 0xF197: return "SystemNameOrEngineType";
+    case 0xF198: return "RepairShopCodeOrTesterSerialNumber";
+    case 0xF199: return "ProgrammingDate";
+    case 0xF19A: return "CalibrationRepairShopCodeOrCalibrationEquipmentSerialNumber";
+    case 0xF19B: return "CalibrationDate";
+    case 0xF19C: return "CalibrationEquipmentSoftwareNumber";
+    case 0xF19D: return "ECUInstallationDate";
+    case 0xF19E: return "ODXFile";
+    case 0xF19F: return "Entity";
+    default: return {};
+    }
+}
+
+std::string uds_describe_request(std::span<const uint8_t> request)
+{
+    if (request.empty())
+    {
+        return {};
+    }
+    const uint8_t sid = request[0];
+    const std::string name = uds_service_name(sid);
+    const auto did = [&](std::size_t at) -> std::string
+    {
+        if (request.size() < at + 2)
+        {
+            return {};
+        }
+        const uint16_t d = static_cast<uint16_t>(request[at] << 8 | request[at + 1]);
+        const std::string_view n = uds_did_name(d);
+        return n.empty() ? std::format(" {:04X}", d) : std::format(" {:04X} {}", d, n);
+    };
+    switch (sid)
+    {
+    case 0x10: case 0x11: case 0x3E: case 0x28: case 0x85:
+        return request.size() >= 2 ? std::format("{} 0x{:02X}", name, request[1] & 0x7F) : name;
+    case 0x22: case 0x2E: case 0x2F:
+        return name + did(1);
+    case 0x19:
+        return request.size() >= 2 ? std::format("{} 0x{:02X}", name, request[1]) : name;
+    case 0x31:
+        return request.size() >= 4 ? std::format("{} 0x{:02X} {:02X}{:02X}", name, request[1], request[2], request[3])
+                                   : name;
+    case 0x27:
+        return request.size() >= 2 ? std::format("{} 0x{:02X}", name, request[1]) : name;
+    default:
+        return name;
+    }
 }
 
 std::string uds_describe(std::span<const uint8_t> request, std::span<const uint8_t> response)
@@ -454,37 +883,28 @@ std::string uds_describe(std::span<const uint8_t> request, std::span<const uint8
         return response.size() >= 3 ? std::format("NRC 0x{:02X} {}", response[2], uds_nrc_name(response[2]))
                                     : "negative response";
     }
-    const auto ascii = [](std::span<const uint8_t> b)
-    {
-        std::string s;
-        for (const uint8_t c : b)
-        {
-            s += c >= 0x20 && c < 0x7F ? static_cast<char>(c) : '.';
-        }
-        return s;
-    };
-    const auto hex = [](std::span<const uint8_t> b)
-    {
-        std::string s;
-        for (const uint8_t c : b)
-        {
-            s += std::format("{}{:02X}", s.empty() ? "" : " ", c);
-        }
-        return s;
-    };
     switch (response[0])
     {
     case 0x50:
+        if (response.size() >= 4)
+        {
+            return std::format("session 0x{:02X} active, P2 {} ms P2* {} ms", response[1],
+                               response[2] << 8 | response[3],
+                               response.size() >= 6 ? (response[4] << 8 | response[5]) * 10 : 0);
+        }
         return response.size() >= 2 ? std::format("session 0x{:02X} active", response[1]) : "session changed";
     case 0x51:
-        return "ECU reset accepted";
+        return response.size() >= 2 ? std::format("ECU reset 0x{:02X} accepted", response[1]) : "ECU reset accepted";
     case 0x54:
         return "DTCs cleared";
     case 0x62:
         if (response.size() >= 3)
         {
+            const uint16_t d = static_cast<uint16_t>(response[1] << 8 | response[2]);
+            const std::string_view nm = uds_did_name(d);
             const auto data = response.subspan(3);
-            return std::format("DID {:02X}{:02X} = {}  \"{}\"", response[1], response[2], hex(data), ascii(data));
+            return std::format("DID {:04X}{} = {}  \"{}\"", d, nm.empty() ? "" : std::format(" {}", nm),
+                               hex_bytes(data), ascii_bytes(data));
         }
         break;
     case 0x6E:
@@ -493,35 +913,52 @@ std::string uds_describe(std::span<const uint8_t> request, std::span<const uint8
             return std::format("DID {:02X}{:02X} written", response[1], response[2]);
         }
         break;
+    case 0x6F:
+        if (response.size() >= 3)
+        {
+            return std::format("I/O control DID {:02X}{:02X}", response[1], response[2]);
+        }
+        break;
+    case 0x63:
+        return std::format("memory read: {}", hex_bytes(response.subspan(1)));
+    case 0x7D:
+        return "memory written";
+    case 0x68:
+        return "communication control done";
+    case 0xC5:
+        return "DTC setting changed";
     case 0x71:
         if (response.size() >= 4)
         {
             return std::format("routine {:02X}{:02X} sub 0x{:02X}{}{}", response[2], response[3], response[1],
-                               response.size() > 4 ? ": " : "", hex(response.subspan(4)));
+                               response.size() > 4 ? ": " : "", hex_bytes(response.subspan(4)));
         }
         break;
     case 0x59:
-        // 19 02 (by status mask): 59 02 <availability mask> then DTC (3 bytes) + status, repeated.
-        if (response.size() >= 3 && request.size() >= 2 && (request[1] == 0x02 || request[1] == 0x0A))
+    {
+        // The report type is echoed in response[1], so the request is not needed to read it:
+        // 01/07/11 (count), 02/0A (list by status), 04/06 (snapshot / extended data).
+        const uint8_t sub = response.size() >= 2 ? response[1] : 0;
+        if ((sub == 0x01 || sub == 0x07 || sub == 0x11) && response.size() >= 6)
         {
-            std::string s;
-            int n = 0;
-            for (std::size_t i = 3; i + 4 <= response.size(); i += 4, ++n)
-            {
-                // The ISO 15031-6 letter is in the top two bits (P C B U), the rest as digits.
-                const uint8_t hi = response[i];
-                s += std::format("\n  {}{:01X}{:01X}{:02X}-{:02X}  status 0x{:02X}", "PCBU"[hi >> 6], (hi >> 4) & 0x3,
-                                 hi & 0x0F, response[i + 1], response[i + 2], response[i + 3]);
-            }
-            return std::format("{} DTC{}{}", n, n == 1 ? "" : "s", s);
+            return std::format("DTC count {}", response[4] << 8 | response[5]);
+        }
+        if ((sub == 0x02 || sub == 0x0A) && response.size() >= 3)
+        {
+            return dtc_list(response.subspan(3));
+        }
+        if (sub == 0x04 || sub == 0x06)
+        {
+            return std::format("DTC record: {}", hex_bytes(response.subspan(1)));
         }
         break;
+    }
     case 0x7E:
         return "tester present";
     case 0x67:
         if (response.size() >= 2)
         {
-            return response[1] % 2 == 1 ? std::format("seed {}", hex(response.subspan(2))) : "security access granted";
+            return response[1] % 2 == 1 ? std::format("seed {}", hex_bytes(response.subspan(2))) : "security access granted";
         }
         break;
     default:
@@ -566,6 +1003,11 @@ bool uds_learner_add(UdsLearner& l, const UdsEcu& ecu)
                 e.name = ecu.name;
                 changed = true;
             }
+            if (!ecu.services.empty() && e.services != ecu.services)
+            {
+                e.services = ecu.services;
+                changed = true;
+            }
             return changed;
         }
     }
@@ -579,7 +1021,21 @@ bool uds_learn(UdsLearner& l, const BusMessage& frame)
     {
         return false;
     }
-    const auto payload = first_payload(frame);
+    const int ae = l.addr_ext ? 1 : 0;
+    if (has_flag(frame, bus_flag::extended))
+    {
+        // Track J1939 source addresses (low byte) as sweep candidates, 0xFE/0xFF aside.
+        const uint8_t sa = static_cast<uint8_t>(frame.id & 0xFF);
+        if (sa != 0xFE && sa != 0xFF)
+        {
+            const auto at = std::ranges::lower_bound(l.j1939_sources, sa);
+            if (at == l.j1939_sources.end() || *at != sa)
+            {
+                l.j1939_sources.insert(at, sa);
+            }
+        }
+    }
+    const auto payload = first_payload(frame, ae);
     if (!payload)
     {
         return false;

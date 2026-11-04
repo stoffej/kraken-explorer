@@ -285,6 +285,23 @@ TEST_CASE("uds extended multi frame extracts address metadata")
     CHECK(out.metadata.at("Target Address") == 0xFEu);
 }
 
+TEST_CASE("uds extended addressing skips the leading address byte")
+{
+    UdsDecoder d;
+    d.addr_ext = true;
+    ProtocolMessage out;
+    // Address byte 0x10, then single frame 0x02 0x10 0x01.
+    REQUIRE(uds_decode(d, frame(0x7E0, {0x10, 0x02, 0x10, 0x01}, {.len = 8}), out) == DecodeStatus::Completed);
+    CHECK(out.payload == std::vector<uint8_t>{0x10, 0x01});
+    CHECK(out.metadata.at("Address Extension") == 0x10u);
+
+    // Multi frame with the same address byte in front of every frame.
+    CHECK(uds_decode(d, frame(0x7E0, {0x10, 0x10, 0x0A, 0x22, 1, 2, 3, 4}, {.len = 8}), out) == DecodeStatus::Consumed);
+    REQUIRE(uds_decode(d, frame(0x7E0, {0x10, 0x21, 5, 6, 7, 8, 9, 0}, {.len = 8}), out) == DecodeStatus::Completed);
+    CHECK(out.payload.size() == 10);
+    CHECK(out.payload[0] == 0x22);
+}
+
 // --- protocol_decode ---
 
 // Issue #38 follow-up: a UDS request Kraken Explorer transmits itself must decode

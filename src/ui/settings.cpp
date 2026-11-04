@@ -1,6 +1,7 @@
 #include "ui/settings.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -57,6 +58,20 @@ void settings_ini_write(const App& app, std::string& out)
     line("ui/theme", theme_names[static_cast<int>(app.settings.theme)]);
     line("ui/font_scale", app.settings.font_scale_pct);
     line("update/check", app.settings.update_check ? 1 : 0);
+    line("uds/addr_ext", app.settings.uds_addr_ext ? 1 : 0);
+    line("uds/fd", app.uds.fd ? 1 : 0);
+    line("uds/brs", app.uds.brs ? 1 : 0);
+    line("uds/txlen", app.uds.tx_len_idx);
+    line("uds/padding", app.uds.padding);
+    line("uds/p2", app.uds.p2);
+    line("uds/p2star", app.uds.p2_star);
+    for (const UdsEcu& e : app.uds.learner.ecus)
+    {
+        if (!e.name.empty()) // only the ones the user named are worth keeping
+        {
+            line("uds/ecu", std::format("{} {} {:X} {:X} {}", e.iface, e.extended ? 1 : 0, e.tx_id, e.rx_id, e.name));
+        }
+    }
     line("mainWindow/CANblaster", app.menu.canblaster ? 1 : 0);
     for (std::size_t i = 0; i < app.menu.chords.size(); ++i)
     {
@@ -110,6 +125,47 @@ void settings_ini_read_line(App& app, std::string_view line)
     else if (key == "update/check")
     {
         app.settings.update_check = value == "1";
+    }
+    else if (key == "uds/addr_ext")
+    {
+        app.settings.uds_addr_ext = value == "1";
+    }
+    else if (key == "uds/fd")
+    {
+        app.uds.fd = value == "1";
+    }
+    else if (key == "uds/brs")
+    {
+        app.uds.brs = value == "1";
+    }
+    else if (key == "uds/txlen" && parse_number(value, n))
+    {
+        app.uds.tx_len_idx = std::clamp(n, 0, 7);
+    }
+    else if (key == "uds/padding")
+    {
+        app.uds.padding = value;
+    }
+    else if (key == "uds/p2")
+    {
+        app.uds.p2 = value;
+    }
+    else if (key == "uds/p2star")
+    {
+        app.uds.p2_star = value;
+    }
+    else if (key == "uds/ecu")
+    {
+        // "<iface> <ext> <txHex> <rxHex> <name...>"
+        std::string s(value);
+        unsigned iface = 0, ext = 0;
+        uint32_t tx = 0, rx = 0;
+        char name[128] = {0};
+        if (std::sscanf(s.c_str(), "%u %u %x %x %127[^\n]", &iface, &ext, &tx, &rx, name) >= 4)
+        {
+            uds_learner_add(app.uds.learner, {.iface = static_cast<uint16_t>(iface), .extended = ext != 0,
+                                              .tx_id = tx, .rx_id = rx, .name = name});
+        }
     }
     else if (key == "mainWindow/CANblaster")
     {
