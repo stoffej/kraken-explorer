@@ -39,6 +39,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -173,6 +174,10 @@ struct UdsDidValue
 [[nodiscard]] std::string uds_describe_request(std::span<const uint8_t> request);
 // ISO 14229-1 Annex C name of a standard DID (F180..F19F), empty otherwise.
 [[nodiscard]] std::string_view uds_did_name(uint16_t did);
+// "<hex code> <text>" lines (DTC text / DID name files, one per product): one entry per line,
+// "#" comments, an optional 0x prefix, the text after the first blank. Added to `out`; returns
+// how many lines were entries.
+int parse_code_lines(std::string_view text, std::map<uint32_t, std::string>& out);
 
 // --- Address discovery ---
 

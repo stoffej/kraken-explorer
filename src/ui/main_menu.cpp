@@ -56,6 +56,8 @@ constexpr std::array<CommandInfo, static_cast<std::size_t>(Command::Count)> comm
     {"UDS Diagnostics"},
     {"DBC Editor"},
     {"Standalone Graph", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_B},
+    {"Reset Window Layout"},
+    {"Dock Floating Windows"},
     {"Conditional Logging..."},
     {"Macros..."},
     {"Find Signal...", ImGuiMod_Ctrl | ImGuiKey_P},
@@ -235,6 +237,9 @@ void draw_menu_bar(App& app)
         ImGui::Separator();
         menu_item(app, Command::StandaloneGraph);
         menu_item(app, Command::FindSignal);
+        ImGui::Separator();
+        menu_item(app, Command::ResetLayout);
+        menu_item(app, Command::DockFloating);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help"))

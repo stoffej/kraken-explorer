@@ -449,6 +449,16 @@ TEST_CASE("DID and service names in descriptions")
 {
     CHECK(uds_did_name(0xF190) == "VIN");
     CHECK(uds_describe_request(Bytes{0x22, 0xF1, 0x90}) == "ReadDataByIdentifier F190 VIN");
+    CHECK(uds_describe_request(Bytes{0x10, 0x83}) == "DiagnosticSessionControl 0x03 extendedDiagnosticSession (suppress positive response)");
+    CHECK(uds_describe_request(Bytes{0x11, 0x01}) == "EcuReset 0x01 hardReset");
+    CHECK(uds_describe_request(Bytes{0x19, 0x02, 0xFF}) == "ReadDTCInformation 0x02 reportDTCByStatusMask, status mask 0xFF");
+    CHECK(uds_describe_request(Bytes{0x19, 0x04, 0xF0, 0x00, 0x16, 0xFF}) == "ReadDTCInformation 0x04 reportDTCSnapshotRecordByDTCNumber, DTC F00016 record 0xFF (all)");
+    CHECK(uds_describe_request(Bytes{0x14, 0xFF, 0xFF, 0xFF}) == "ClearDiagnosticInformation group FFFFFF (all DTCs)");
+    CHECK(uds_describe_request(Bytes{0x27, 0x03}) == "SecurityAccess 0x03 requestSeed level 2");
+    CHECK(uds_describe_request(Bytes{0x27, 0x02, 0xAB, 0xCD}) == "SecurityAccess 0x02 sendKey level 1, key AB CD");
+    CHECK(uds_describe_request(Bytes{0x31, 0x01, 0xFF, 0x00, 0x05}) == "RoutineControl 0x01 startRoutine, routine FF00, options 05");
+    CHECK(uds_describe_request(Bytes{0x23, 0x24, 0x10, 0x00, 0x00, 0x00, 0x00, 0x04}) == "ReadMemoryByAddress address 0x10000000 size 0x4");
+    CHECK(uds_describe_request(Bytes{0x2F, 0x01, 0x02, 0x03, 0x7F}) == "InputOutputControlByIdentifier 0102 0x03 shortTermAdjustment, state 7F");
     CHECK(uds_describe(Bytes{0x22, 0xF1, 0x90}, Bytes{0x62, 0xF1, 0x90, 'X'}).starts_with("DID F190 VIN = 58"));
     CHECK(uds_describe({}, Bytes{0x59, 0x01, 0xFF, 0x01, 0x00, 0x05}) == "DTC count 5");
 }

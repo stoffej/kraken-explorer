@@ -36,6 +36,7 @@
 #include <utility>
 
 #include "app.h"
+#include "core/text.h"
 #include "core/autosar_e2e.h"
 #include "decoders/decoders.h"
 #include "core/log.h"
@@ -849,6 +850,11 @@ PYBIND11_EMBEDDED_MODULE(kraken, m)
         // An explicit format wins; otherwise infer from the extension. Unlike the GUI save
         // dialog an unrecognised name is an error, not a silent fallback to ASC.
         std::optional<TraceFileFormat> resolved;
+        if (format.is_none() && iequals(std::filesystem::path(path).extension().string(), ".csv"))
+        {
+            // ponytail: the CSV writer (DBC columns) lives in the UI layer; kraken_python cannot link it.
+            throw py::value_error("CSV with decoded signals is written by Trace > Save Trace to File or REST POST /trace/save");
+        }
         if (format.is_none())
         {
             resolved = trace_format_from_path(path);

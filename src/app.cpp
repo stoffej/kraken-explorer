@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "core/log.h"
+#include "core/text.h"
 #include "core/platform.h"
 #include "core/trace_file_writer.h"
 #include "drivers/grip.h"
@@ -134,10 +135,25 @@ void app_before_frame(App& app)
 
 void app_trace_save(App& app, const std::string& path)
 {
+    // CSV carries the DBC columns (sender, name, decoded signals) next to the raw data: the view of
+    // the trace window, for a spreadsheet or pandas. The bus formats below carry frames only.
+    if (iequals(std::filesystem::path(path).extension().string(), ".csv"))
+    {
+        const int64_t n = trace_write_csv(app, path);
+        if (n < 0)
+        {
+            log_error(std::format("Cannot write {}", path));
+        }
+        else
+        {
+            log_info(std::format("Saved {} frames with decoded signals to {}", n, path));
+        }
+        return;
+    }
     const auto format = trace_format_from_path(path);
     if (!format)
     {
-        log_error(std::format("Unknown trace format for {} (use .asc, .blf, .candump, .log, .mf4, .pcap, .pcapng or .trc)", path));
+        log_error(std::format("Unknown trace format for {} (use .asc, .blf, .candump, .csv, .log, .mf4, .pcap, .pcapng or .trc)", path));
         return;
     }
     // ponytail: the whole trace in RAM (88 B per frame, a file view decoded); a chunked writer if
@@ -234,7 +250,8 @@ void app_frame(App& app)
         {
             file_dialog_open(app.trace_file_dialog, FileDialogMode::Save, "Save Trace", app.recorder.config.folder + "/trace.asc",
                              {{"Vector ASC", "*.asc"}, {"Linux candump", "*.candump *.log"}, {"MDF4", "*.mf4"},
-                              {"PCAP", "*.pcap"}, {"PCAPng", "*.pcapng"}, {"PEAK PCAN trace", "*.trc"}});
+                              {"PCAP", "*.pcap"}, {"PCAPng", "*.pcapng"}, {"PEAK PCAN trace", "*.trc"},
+                              {"CSV with DBC columns", "*.csv"}});
         }
         if (menu_take(app.menu, Command::TraceImportFull))
         {
@@ -280,6 +297,7 @@ void app_frame(App& app)
         if (menu_take(app.menu, Command::NewUdsDiagnostics))
         {
             app.uds.open = true;
+            ImGui::SetWindowFocus(workspace_window_name(*tab, "UDS Diagnostics").c_str()); // open by default: bring the tab to the front
         }
         draw_uds_window(app, app.uds, *tab);
         if (menu_take(app.menu, Command::NewDbcEditor))

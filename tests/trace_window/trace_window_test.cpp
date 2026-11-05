@@ -296,7 +296,7 @@ static const ImGuiTable* agg_table()
     ImGuiContext& g = *ImGui::GetCurrentContext();
     for (int i = 0; i < g.Tables.GetMapSize(); ++i)
     {
-        if (const ImGuiTable* t = g.Tables.TryGetMapData(i); t != nullptr && t->ColumnsCount == 15)
+        if (const ImGuiTable* t = g.Tables.TryGetMapData(i); t != nullptr && t->ColumnsCount == 16)
         {
             return t;
         }
@@ -314,9 +314,9 @@ TEST_CASE("monitor default columns fit a narrow dock, ScrollX only below the min
         const BusMessage m = frame(0x123, {1, 2, 3, 4, 5, 6, 7, 8}, 0, 1);
         trace_append(app.trace, {&m, 1});
 
-        // Default-visible: Index, Time, ID, Name, DLC, Data, Cycle (mean).
-        constexpr bool shown[15] = {true, true, false, false, false, true, false, true,
-                                    true, true, false, false, false, true, false};
+        // Default-visible: Index, Time, ID, Name, DLC, Data, Cycle (mean); Signals is disabled in Monitor.
+        constexpr bool shown[16] = {true, true, false, false, false, true, false, true,
+                                    true, true, false, false, false, false, true, false};
         struct Layout
         {
             float total, outer;

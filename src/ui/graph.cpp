@@ -2378,13 +2378,7 @@ void draw_graph_windows(App& app, WorkspaceTab* current)
     const ImGuiID dock_into = current != nullptr ? graph_tab_add_button(app, *current) : 0;
     if (current != nullptr && (view || widget || standalone || dock_into != 0))
     {
-        unsigned id = 1;
-        for (const auto& g : current->graphs)
-        {
-            id = std::max(id, g.id + 1);
-        }
-        GraphState& g = current->graphs.emplace_back();
-        g.id = id;
+        GraphState& g = graph_new(*current);
         g.standalone = standalone;
         g.dock_into = dock_into;
     }
@@ -2425,6 +2419,23 @@ void draw_graph_windows(App& app, WorkspaceTab* current)
     }
     draw_find_signal(app, *current, main);
     std::erase_if(current->graphs, [](const GraphState& g) { return !g.open; });
+}
+
+GraphState& graph_new(WorkspaceTab& tab)
+{
+    unsigned id = 1;
+    for (const auto& g : tab.graphs)
+    {
+        id = std::max(id, g.id + 1);
+    }
+    GraphState& g = tab.graphs.emplace_back();
+    g.id = id;
+    return g;
+}
+
+void graph_add_signal(GraphState& g, const Setup& setup, const SignalEntry& e)
+{
+    add_search_hit(g, setup, e);
 }
 
 void graph_show_range(GraphState& g, const Setup& setup, const SignalEntry& e, int64_t t0_ns, int64_t t1_ns)

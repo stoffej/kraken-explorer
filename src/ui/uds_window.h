@@ -21,7 +21,7 @@
 // or a physical sweep, or typed in), then on the Services tab send sessions, tester present, resets,
 // DIDs, DTCs, routines, I/O control, memory access, security access or a raw request; the Scan tab
 // finds ECUs and probes their services and DIDs; the Transport tab sets CAN FD, addressing and
-// timing. Requests run on the window's worker thread; the log below is a copyable text box. One
+// timing. Requests run on the window's worker thread; the log below is a striped list of selectable text boxes. One
 // state for every tab, like the Python Script window.
 
 #pragma once
@@ -46,14 +46,13 @@ struct WorkspaceTab;
 
 struct UdsWindow
 {
-    bool open = false;
+    bool open = true; // a tab after Value Search in the default layout; the close button hides it
     UdsLearner learner;          // main thread: ECUs learned from the traffic, scans and sweeps
     int ecu = -1;                // learner.ecus index; -1: the manual ids below
     uint16_t iface = 0;          // manual target's interface (App::ifaces index)
     std::string tx_text = "7E0"; // manual request id, hex
     std::string rx_text = "7E8"; // manual response id, hex
     bool extended = false;       // manual target uses 29-bit ids
-    int tab = 0;                 // Services / Scan / Transport
 
     // Services tab fields.
     std::string did = "F190";
@@ -71,6 +70,8 @@ struct UdsWindow
     std::string dtc_code = "000000";
     std::map<uint32_t, std::string> dtc_names; // 3-byte trouble code -> text, loaded from a file
     std::string dtc_file;        // path of the loaded DTC text file (for the status line)
+    std::map<uint32_t, std::string> did_names; // DID -> name, loaded from a per-product file (same format)
+    std::string did_file;
     std::string sec_level = "01";
     std::string sec_key;
     std::string raw = "22 F1 90";
@@ -96,17 +97,20 @@ struct UdsWindow
     std::string n_bs = "1000";
     std::string n_cr = "1000";
 
-    std::string log_view;        // copy of log for the read-only text box
+    std::vector<std::string> log_view; // copy of log for drawing: one entry per request / response
+    std::vector<float> log_heights;    // of log_view's entries at log_wrap, so off-screen ones are skipped
+    float log_wrap = 0.0f;
     uint64_t log_seen = 0;
-    bool log_follow = false;     // new lines last frame: scroll to the bottom
-    bool log_active = false;     // the user is selecting in the log
+    uint64_t log_clears_seen = 0;
+    bool log_follow = true;      // scrolled to the bottom: new entries keep it there
 
     // Shared with the worker, guarded by mutex.
     std::mutex mutex;
     std::condition_variable_any cv; // waits on the worker's stop token too
     std::deque<std::function<void()>> jobs;
-    std::string log;
+    std::vector<std::string> log;
     uint64_t log_total = 0;
+    uint64_t log_clears = 0;
     std::vector<UdsEcu> found;   // scan / sweep results for the main thread to merge
     UdsTarget target;            // current target, for tester present
     bool tester_present = false; // 3E 80 every 2 s to target

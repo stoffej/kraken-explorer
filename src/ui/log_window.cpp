@@ -175,6 +175,23 @@ void draw_log_window(LogWindowState& s, const WorkspaceTab& tab)
         log_clear();
     }
     ImGui::SetItemTooltip("Clear the log");
+    const auto row_text = [&](const LogEntry& e)
+    {
+        const std::string_view level = log_level_name(e.level);
+        return std::format("{}  {:<5}  {}\n", time_text(e.time), level, e.text);
+    };
+    same_line_or_wrap(ImGui::CalcTextSize("Copy").x + ImGui::GetStyle().FramePadding.x * 2.0f);
+    if (ImGui::Button("Copy"))
+    {
+        std::string all;
+        const std::lock_guard lock(log.mutex);
+        for (const uint64_t r : s.rows)
+        {
+            all += row_text(log_entry_at(log, r - s.base));
+        }
+        ImGui::SetClipboardText(all.c_str());
+    }
+    ImGui::SetItemTooltip("Copy the shown lines to the clipboard (right-click a line for just that one)");
     same_line_or_wrap(icon_text_button_width("Export..."));
     const bool export_clicked = icon_text_button("Export...", Icon::DocumentSaveAs);
     ImGui::SetItemTooltip("Save the log to a file");
@@ -237,7 +254,17 @@ void draw_log_window(LogWindowState& s, const WorkspaceTab& tab)
                 const LogEntry& e = log_entry_at(log, s.rows[static_cast<size_t>(row)] - s.base);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(time_text(e.time).c_str());
+                ImGui::PushID(row);
+                ImGui::Selectable(time_text(e.time).c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+                if (ImGui::BeginPopupContextItem("##row"))
+                {
+                    if (ImGui::MenuItem("Copy line"))
+                    {
+                        ImGui::SetClipboardText(row_text(e).c_str());
+                    }
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
                 ImGui::TableNextColumn();
                 const std::string_view level = log_level_name(e.level);
                 ImGui::TextColored(level_color(filter_level(e.level)), "%.*s", static_cast<int>(level.size()), level.data());

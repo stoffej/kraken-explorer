@@ -40,6 +40,7 @@ void build_default_layout(WorkspaceTab& tab, ImVec2 size)
     dock("Message View", mid);
     dock("Python Script", mid);
     dock("Value Search", mid);
+    dock("UDS Diagnostics", mid); // opened on demand; lands as the tab after Value Search
     dock("Graph", graph);
     ImGui::DockBuilderFinish(tab.dockspace);
     tab.focus_front = 2;
@@ -55,7 +56,7 @@ WorkspaceTab& workspace_add_tab(WorkspaceTabs& ws, std::string title, unsigned u
     tab.title = std::move(title);
     tab.uid = uid != 0 ? uid : ws.next_uid;
     ws.next_uid = std::max(ws.next_uid, tab.uid + 1);
-    const std::string key = std::format("workspace{}v5", tab.uid); // v5: taller tabbed node; bump to re-layout old inis
+    const std::string key = std::format("workspace{}v6", tab.uid); // v6: UDS tab in the tabbed node; bump to re-layout old inis
     tab.dockspace = ImHashStr(key.c_str());
     ws.current = static_cast<int>(ws.tabs.size()) - 1;
     ws.select_current = true;
@@ -288,6 +289,33 @@ WorkspaceTab* draw_workspace(App& app)
             build_default_layout(*tab, vp->WorkSize);
         }
         tab->layout_built = true;
+    }
+    if (menu_take(app.menu, Command::ResetLayout))
+    {
+        build_default_layout(*tab, vp->WorkSize); // extra windows (Replay, Watch, ...) float until docked again
+    }
+    // Floating windows (a Replay dragged out, a window opened as its own OS window) are awkward to
+    // drag back into the dock: this puts every floating window of the tab into the tabbed node.
+    if (menu_take(app.menu, Command::DockFloating))
+    {
+        const std::string suffix = std::format("@{}", tab->uid);
+        const ImGuiWindow* anchor = ImGui::FindWindowByName(workspace_window_name(*tab, "Value Search").c_str());
+        const bool anchored = anchor != nullptr && anchor->DockNode != nullptr
+            && ImGui::DockNodeGetRootNode(anchor->DockNode)->ID == tab->dockspace; // not when Value Search floats too
+        const ImGuiID target = anchored ? anchor->DockNode->ID : tab->dockspace;
+        for (const ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        {
+            const std::string_view name = w->Name;
+            if (w->Flags & ImGuiWindowFlags_ChildWindow || !name.ends_with(suffix) || !w->WasActive)
+            {
+                continue;
+            }
+            const ImGuiDockNode* root = w->DockNode != nullptr ? ImGui::DockNodeGetRootNode(w->DockNode) : nullptr;
+            if (root == nullptr || root->ID != tab->dockspace)
+            {
+                ImGui::DockBuilderDockWindow(w->Name, target);
+            }
+        }
     }
     ImGui::DockSpaceOverViewport(tab->dockspace, vp);
     // Size to fit: once CAN Status knows the width of all its columns, the left column of a fresh

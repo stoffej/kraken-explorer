@@ -63,6 +63,7 @@ struct TraceFilter
     std::set<uint32_t> hidden_ids;     // CAN id (can_id())
     std::set<uint32_t> hidden_lin_ids; // LIN frame id
     std::set<uint16_t> hidden_ifaces;
+    std::set<std::string, std::less<>> hidden_nodes; // DBC sender / LDF publisher names
 };
 
 // Monitor, rolling log: one frame that passed the filter.
@@ -209,6 +210,9 @@ void trace_append_id(std::string& out, const BusMessage& m, bool decimal);
 // Value of an expanded signal row: "raw - value name", else the physical value (+ unit) with up
 // to 15 significant digits ("0.3", not "0.30000000000000004"); float32 signals at float precision.
 void trace_append_signal_value(std::string& out, const CanDbSignal& sig, uint64_t raw);
+// The whole trace as CSV with the DBC columns (sender, name, decoded signals) next to the raw
+// data. Returns the number of frames written, -1 when the file cannot be opened.
+int64_t trace_write_csv(const App& app, const std::string& path);
 
 void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab);
 

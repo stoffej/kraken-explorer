@@ -43,6 +43,8 @@ enum class Command
     NewUdsDiagnostics,
     NewDbcEditor,
     StandaloneGraph,
+    ResetLayout, // Window > Reset Window Layout, ui/workspace_tabs
+    DockFloating, // Window > Dock Floating Windows, ui/workspace_tabs
     ConditionalLogging,
     Macros,     // Measurement > Macros..., ui/macros
     FindSignal, // Ctrl+P palette, handled by ui/graph

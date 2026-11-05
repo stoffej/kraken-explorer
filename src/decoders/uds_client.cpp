@@ -19,9 +19,12 @@
 
 #include "decoders/uds_client.h"
 
+#include "core/text.h"
+
 #include <algorithm>
 #include <array>
 #include <format>
+#include <map>
 #include <optional>
 #include <thread>
 
@@ -836,6 +839,82 @@ std::string_view uds_did_name(uint16_t did)
     }
 }
 
+// Sub-function names of the services that have one (ISO 14229-1), "" when unknown.
+const char* uds_sub_name(uint8_t sid, uint8_t sub)
+{
+    sub &= 0x7F; // without suppressPosRspMsgIndicationBit
+    switch (sid)
+    {
+    case 0x10:
+        switch (sub)
+        {
+        case 0x01: return "defaultSession";
+        case 0x02: return "programmingSession";
+        case 0x03: return "extendedDiagnosticSession";
+        case 0x04: return "safetySystemDiagnosticSession";
+        default: return "";
+        }
+    case 0x11:
+        switch (sub)
+        {
+        case 0x01: return "hardReset";
+        case 0x02: return "keyOffOnReset";
+        case 0x03: return "softReset";
+        case 0x04: return "enableRapidPowerShutDown";
+        case 0x05: return "disableRapidPowerShutDown";
+        default: return "";
+        }
+    case 0x19:
+        switch (sub)
+        {
+        case 0x01: return "reportNumberOfDTCByStatusMask";
+        case 0x02: return "reportDTCByStatusMask";
+        case 0x03: return "reportDTCSnapshotIdentification";
+        case 0x04: return "reportDTCSnapshotRecordByDTCNumber";
+        case 0x05: return "reportDTCStoredDataByRecordNumber";
+        case 0x06: return "reportDTCExtDataRecordByDTCNumber";
+        case 0x0A: return "reportSupportedDTC";
+        case 0x0B: return "reportFirstTestFailedDTC";
+        case 0x0C: return "reportFirstConfirmedDTC";
+        case 0x0D: return "reportMostRecentTestFailedDTC";
+        case 0x0E: return "reportMostRecentConfirmedDTC";
+        case 0x14: return "reportDTCFaultDetectionCounter";
+        case 0x15: return "reportDTCWithPermanentStatus";
+        default: return "";
+        }
+    case 0x27: return sub & 1 ? "requestSeed" : "sendKey";
+    case 0x28:
+        switch (sub)
+        {
+        case 0x00: return "enableRxAndTx";
+        case 0x01: return "enableRxAndDisableTx";
+        case 0x02: return "disableRxAndEnableTx";
+        case 0x03: return "disableRxAndTx";
+        default: return "";
+        }
+    case 0x2F: // control parameter, not a sub-function, but named the same way
+        switch (sub)
+        {
+        case 0x00: return "returnControlToECU";
+        case 0x01: return "resetToDefault";
+        case 0x02: return "freezeCurrentState";
+        case 0x03: return "shortTermAdjustment";
+        default: return "";
+        }
+    case 0x31:
+        switch (sub)
+        {
+        case 0x01: return "startRoutine";
+        case 0x02: return "stopRoutine";
+        case 0x03: return "requestRoutineResults";
+        default: return "";
+        }
+    case 0x3E: return sub == 0 ? "zeroSubFunction" : "";
+    case 0x85: return sub == 1 ? "on" : sub == 2 ? "off" : "";
+    default: return "";
+    }
+}
+
 std::string uds_describe_request(std::span<const uint8_t> request)
 {
     if (request.empty())
@@ -854,21 +933,119 @@ std::string uds_describe_request(std::span<const uint8_t> request)
         const std::string_view n = uds_did_name(d);
         return n.empty() ? std::format(" {:04X}", d) : std::format(" {:04X} {}", d, n);
     };
+    // "0x01 hardReset", plus the suppress bit when set.
+    const auto sub = [&](std::size_t at = 1) -> std::string
+    {
+        if (request.size() < at + 1)
+        {
+            return {};
+        }
+        const uint8_t b = request[at];
+        std::string out = std::format(" 0x{:02X}", b & 0x7F);
+        if (const char* n = uds_sub_name(sid, b); *n != '\0')
+        {
+            out += std::format(" {}", n);
+        }
+        if (b & 0x80)
+        {
+            out += " (suppress positive response)";
+        }
+        return out;
+    };
+    const auto rest = [&](std::size_t from, const char* what) -> std::string
+    {
+        if (request.size() <= from)
+        {
+            return {};
+        }
+        return std::format(", {} {}", what, hex_bytes(request.subspan(from)));
+    };
+    // 23 / 3D: addressAndLengthFormatIdentifier, then the address and size bytes.
+    const auto memory = [&]() -> std::string
+    {
+        if (request.size() < 2)
+        {
+            return name;
+        }
+        const std::size_t na = request[1] & 0x0F;
+        const std::size_t ns = request[1] >> 4;
+        if (na == 0 || ns == 0 || request.size() < 2 + na + ns)
+        {
+            return std::format("{} (ALFID 0x{:02X}: {} address + {} size bytes expected)", name, request[1], na, ns);
+        }
+        uint64_t addr = 0;
+        uint64_t size = 0;
+        for (std::size_t i = 0; i < na; ++i)
+        {
+            addr = addr << 8 | request[2 + i];
+        }
+        for (std::size_t i = 0; i < ns; ++i)
+        {
+            size = size << 8 | request[2 + na + i];
+        }
+        return std::format("{} address 0x{:X} size 0x{:X}", name, addr, size) + rest(2 + na + ns, "data");
+    };
     switch (sid)
     {
     case 0x10: case 0x11: case 0x3E: case 0x28: case 0x85:
-        return request.size() >= 2 ? std::format("{} 0x{:02X}", name, request[1] & 0x7F) : name;
-    case 0x22: case 0x2E: case 0x2F:
-        return name + did(1);
-    case 0x19:
-        return request.size() >= 2 ? std::format("{} 0x{:02X}", name, request[1]) : name;
-    case 0x31:
-        return request.size() >= 4 ? std::format("{} 0x{:02X} {:02X}{:02X}", name, request[1], request[2], request[3])
-                                   : name;
-    case 0x27:
-        return request.size() >= 2 ? std::format("{} 0x{:02X}", name, request[1]) : name;
-    default:
+        return name + sub();
+    case 0x14:
+        if (request.size() >= 4)
+        {
+            const uint32_t group = static_cast<uint32_t>(request[1] << 16 | request[2] << 8 | request[3]);
+            return std::format("{} group {:06X}{}", name, group, group == 0xFFFFFF ? " (all DTCs)" : "");
+        }
         return name;
+    case 0x22:
+        return name + did(1);
+    case 0x2E:
+        return name + did(1) + rest(3, "data");
+    case 0x2F: // byte 3 is the control parameter: no suppress bit
+        return name + did(1)
+            + (request.size() >= 4 ? std::format(" 0x{:02X} {}", request[3], uds_sub_name(0x2F, request[3])) : std::string())
+            + rest(4, "state");
+    case 0x19:
+    {
+        std::string out = name + sub();
+        const uint8_t s = request.size() >= 2 ? request[1] & 0x7F : 0;
+        if ((s == 0x01 || s == 0x02 || s == 0x0F || s == 0x11 || s == 0x12 || s == 0x13) && request.size() >= 3)
+        {
+            out += std::format(", status mask 0x{:02X}", request[2]);
+        }
+        else if (s == 0x05 && request.size() >= 3)
+        {
+            out += std::format(", record 0x{:02X}", request[2]);
+        }
+        else if ((s == 0x03 || s == 0x04 || s == 0x06 || s == 0x10) && request.size() >= 5)
+        {
+            out += std::format(", DTC {:02X}{:02X}{:02X}", request[2], request[3], request[4]);
+            if (request.size() >= 6)
+            {
+                out += std::format(" record 0x{:02X}{}", request[5], request[5] == 0xFF ? " (all)" : "");
+            }
+        }
+        return out;
+    }
+    case 0x31:
+        return name + sub() + (request.size() >= 4 ? std::format(", routine {:02X}{:02X}", request[2], request[3]) : "")
+            + rest(4, "options");
+    case 0x27:
+        if (request.size() >= 2)
+        {
+            const uint8_t s = request[1] & 0x7F;
+            return std::format("{}{} level {}", name, sub(), (s + 1) / 2) + rest(2, s & 1 ? "data" : "key");
+        }
+        return name;
+    case 0x23: case 0x3D:
+        return memory();
+    case 0x36:
+        return request.size() >= 2 ? std::format("{} block 0x{:02X}", name, request[1]) + rest(2, "data") : name;
+    case 0x7F:
+        return request.size() >= 3 ? std::format("{} to {}: NRC 0x{:02X} {}", name, uds_service_name(request[1]),
+                                                 request[2], uds_nrc_name(request[2]))
+                                   : name;
+    default:
+        return name + rest(1, "data");
     }
 }
 
@@ -1095,4 +1272,35 @@ bool uds_learn(UdsLearner& l, const BusMessage& frame)
         l.pending.erase(match);
     }
     return uds_learner_add(l, e);
+}
+
+int parse_code_lines(std::string_view text, std::map<uint32_t, std::string>& out)
+{
+    int n = 0;
+    for (std::size_t at = 0; at < text.size();)
+    {
+        std::size_t end = text.find('\n', at);
+        end = end == std::string_view::npos ? text.size() : end;
+        const std::string_view line = trim(text.substr(at, end - at));
+        at = end + 1;
+        if (line.empty() || line.front() == '#')
+        {
+            continue;
+        }
+        const std::size_t sp = line.find_first_of(" \t,;");
+        std::string_view code = line.substr(0, sp);
+        if (code.starts_with("0x") || code.starts_with("0X"))
+        {
+            code.remove_prefix(2);
+        }
+        uint32_t id = 0;
+        if (!parse_number(code, id, 16))
+        {
+            continue;
+        }
+        const std::size_t t = sp == std::string_view::npos ? std::string_view::npos : line.find_first_not_of(" \t,;", sp);
+        out[id] = t == std::string_view::npos ? std::string() : std::string(line.substr(t));
+        ++n;
+    }
+    return n;
 }

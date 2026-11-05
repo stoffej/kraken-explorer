@@ -24,6 +24,10 @@
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <fstream>
+#include <map>
+#include <optional>
+#include <sstream>
 #include <utility>
 #include <future>
 
@@ -32,6 +36,7 @@
 #include "core/log.h"
 #include "core/net.h"
 #include "core/tasks.h"
+#include "core/text.h"
 #include "decoders/decoders.h"
 #include "ui/diag_dialog.h"
 
@@ -127,8 +132,76 @@ std::optional<uint32_t> json_id(std::string_view v)
 
 // /uds and /uds/scan wait for ECUs, up to seconds: only the interface lookup runs on the main
 // thread, the request itself on this one, so the UI keeps drawing meanwhile.
+// /uds/dtc_file, /uds/did_file: write (or extend) a "<hex code> <text>" file, the format the UDS
+// window's DTC text / DID text Load reads, one per product. codes: one "<code> <text>" per line.
+std::string code_file_json(std::string_view path, std::string_view body, int& status)
+{
+    const std::string file = json_get(body, "path");
+    if (file.empty())
+    {
+        status = 400;
+        return "{\"error\":\"path missing\"}";
+    }
+    const bool dtc = path == "/uds/dtc_file";
+    std::map<uint32_t, std::string> incoming;
+    parse_code_lines(json_get(body, "codes"), incoming);
+    // The file's own lines stay as they are (comments, hand-written entries); a line whose code
+    // is in `incoming` gets the new text, the rest of `incoming` is appended.
+    std::string out;
+    bool fresh = true;
+    if (std::ifstream in(file); in && json_get(body, "replace") != "true")
+    {
+        fresh = false;
+        for (std::string line; std::getline(in, line);)
+        {
+            std::map<uint32_t, std::string> one;
+            if (parse_code_lines(line, one) == 1 && incoming.contains(one.begin()->first))
+            {
+                const uint32_t code = one.begin()->first;
+                line = std::format("{:0{}X} {}", code, dtc ? 6 : 4, incoming[code]);
+                incoming.erase(code);
+            }
+            out += line;
+            out += '\n';
+        }
+    }
+    std::string product = json_get(body, "product");
+    std::ranges::replace_if(product, [](char c) { return c == '\n' || c == '\r'; }, ' ');
+    if (fresh && !product.empty())
+    {
+        out += std::format("# {} for {}\n", dtc ? "DTC texts" : "DID names", product);
+    }
+    for (const auto& [code, text] : incoming)
+    {
+        out += std::format("{:0{}X} {}\n", code, dtc ? 6 : 4, text);
+    }
+    std::ofstream f(file, std::ios::binary);
+    if (!f)
+    {
+        status = 400;
+        return std::format("{{\"error\":{}}}", json_string("cannot write " + file));
+    }
+    f << out;
+    std::map<uint32_t, std::string> all;
+    parse_code_lines(out, all);
+    status = 200;
+    return std::format("{{\"path\":{},\"codes\":{}}}", json_string(file), all.size());
+}
+
 std::string uds_json(App& app, std::string_view path, std::string_view body, int& status)
 {
+    if (path == "/uds/dtc_file" || path == "/uds/did_file")
+    {
+        return code_file_json(path, body, status);
+    }
+    static constexpr std::string_view routes[] = {"/uds", "/uds/scan", "/uds/services", "/uds/dids", "/uds/session",
+                                                  "/uds/tester_present", "/uds/reset", "/uds/security", "/uds/dtc",
+                                                  "/uds/dtc/clear"};
+    if (std::ranges::find(routes, path) == std::end(routes))
+    {
+        status = 404;
+        return "{\"error\":\"no such route\"}";
+    }
     int index = -1;
     const std::string name = json_get(body, "iface");
     tasks_run_on_main_blocking(app.tasks, app, [&](App& a)
@@ -245,7 +318,87 @@ std::string uds_json(App& app, std::string_view path, std::string_view body, int
         return std::format("{{\"dids\":[{}]}}", out);
     }
 
-    const auto req = parse_hex_bytes(json_get(body, "data"));
+    // The convenience routes build the request bytes; /uds takes them as given.
+    std::optional<std::vector<uint8_t>> req;
+    std::string bad; // a field the route could not use: 400 with its name
+    const auto named = [&](const char* key, std::initializer_list<std::pair<const char*, uint8_t>> names, uint8_t fallback)
+    {
+        const std::string v = json_get(body, key);
+        if (v.empty())
+        {
+            return fallback;
+        }
+        for (const auto& [name, sub] : names)
+        {
+            if (v == name)
+            {
+                return sub;
+            }
+        }
+        if (const auto b = byte_of(key))
+        {
+            return *b;
+        }
+        bad = key;
+        return fallback;
+    };
+    if (path == "/uds/session")
+    {
+        req = {0x10, named("session", {{"default", 1}, {"programming", 2}, {"extended", 3}, {"safety", 4}}, 3)};
+    }
+    else if (path == "/uds/tester_present")
+    {
+        req = {0x3E, 0x00};
+    }
+    else if (path == "/uds/reset")
+    {
+        req = {0x11, named("kind", {{"hard", 1}, {"keyOffOn", 2}, {"soft", 3}}, 1)};
+    }
+    else if (path == "/uds/security")
+    {
+        int level = 1;
+        const std::string lv = json_get(body, "level");
+        std::from_chars(lv.data(), lv.data() + lv.size(), level);
+        level = std::max(1, level);
+        const auto key = parse_hex_bytes(json_get(body, "key"));
+        req = {0x27, static_cast<uint8_t>(key && !key->empty() ? 2 * level : 2 * level - 1)};
+        if (key)
+        {
+            req->insert(req->end(), key->begin(), key->end());
+        }
+    }
+    else if (path == "/uds/dtc")
+    {
+        const std::string m = json_get(body, "status_mask");
+        const auto mask = parse_hex_bytes(m); // hex, "FF" or "0x2F"
+        if (!m.empty() && (!mask || mask->size() != 1))
+        {
+            bad = "status_mask";
+        }
+        req = {0x19, 0x02, mask && mask->size() == 1 ? mask->front() : uint8_t{0xFF}};
+    }
+    else if (path == "/uds/dtc/clear")
+    {
+        const std::string g = json_get(body, "group");
+        const auto group = parse_hex_bytes(g);
+        if (!g.empty() && (!group || group->size() != 3))
+        {
+            bad = "group"; // never fall back to "all DTCs" on a typo
+        }
+        req = {0x14, 0xFF, 0xFF, 0xFF};
+        if (group && group->size() == 3)
+        {
+            std::ranges::copy(*group, req->begin() + 1);
+        }
+    }
+    else
+    {
+        req = parse_hex_bytes(json_get(body, "data"));
+    }
+    if (!bad.empty())
+    {
+        return std::format("{{\"error\":{}}}", json_string("bad " + bad));
+    }
     if (!req || req->empty())
     {
         return "{\"error\":\"need data (hex bytes like \\\"22 F1 90\\\")\"}";
@@ -257,8 +410,20 @@ std::string uds_json(App& app, std::string_view path, std::string_view body, int
         return std::format("{{\"error\":{}}}", json_string(r.error));
     }
     status = 200;
-    return std::format("{{\"response\":{},\"text\":{}}}", json_string(format_hex_bytes(r.response)),
-                       json_string(uds_describe(*req, r.response)));
+    std::string extra;
+    if (path == "/uds/dtc" && r.response.size() >= 3 && r.response[0] == 0x59)
+    {
+        // The list as the DTC text files spell the codes (6 hex digits), with the status byte.
+        std::string list;
+        for (std::size_t i = 3; i + 4 <= r.response.size(); i += 4)
+        {
+            list += std::format("{}{{\"code\":\"{:02X}{:02X}{:02X}\",\"status\":\"0x{:02X}\"}}", list.empty() ? "" : ",",
+                                r.response[i], r.response[i + 1], r.response[i + 2], r.response[i + 3]);
+        }
+        extra = std::format(",\"dtcs\":[{}]", list);
+    }
+    return std::format("{{\"request\":{},\"response\":{},\"text\":{}{}}}", json_string(format_hex_bytes(*req)),
+                       json_string(format_hex_bytes(r.response)), json_string(uds_describe(*req, r.response)), extra);
 }
 
 void serve(std::stop_token stop, RestApi& api, App& app)
@@ -314,8 +479,7 @@ void serve(std::stop_token stop, RestApi& api, App& app)
             const std::string_view content(request.data() + header_end + 4, std::min(content_length, request.size() - header_end - 4));
             try
             {
-                if (method == "POST" && (path == "/uds" || path == "/uds/scan" || path == "/uds/services"
-                                         || path == "/uds/dids"))
+                if (method == "POST" && (path == "/uds" || path.starts_with("/uds/")))
                 {
                     body = uds_json(app, path, content, status);
                 }

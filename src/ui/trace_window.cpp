@@ -4,7 +4,9 @@
 #include <cfloat>
 #include <climits>
 #include <charconv>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <iterator>
 #include <optional>
 #include <queue>
@@ -25,6 +27,7 @@
 #include "db/model/lin_db.h"
 #include "drivers/driver.h"
 #include "ui/icons.h"
+#include "ui/signal_search.h"
 #include "ui/theme.h"
 #include "ui/vim_nav.h"
 
@@ -53,6 +56,7 @@ enum Column
     col_name,
     col_dlc,
     col_data,
+    col_signals,
     col_comment,
     col_count, // columns of every table; the cycle columns below exist in the aggregated one only
     col_cycle_min = col_count,
@@ -81,6 +85,7 @@ constexpr ColumnDef columns[col_agg_count] = {
     {"Name", nullptr, 150, false},
     {"DLC", "64", 0, false},
     {"Data", nullptr, 260, false},
+    {"Signals", nullptr, 300, false},
     {"Comment", nullptr, 120, true},
     {"Cycle min", "1000.000", 0, true},
     {"Cycle max", "1000.000", 0, true},
@@ -269,6 +274,12 @@ bool dialog_accepts(const TraceFilter& f, const BusMessage& m)
     return !f.hidden_ifaces.contains(m.iface);
 }
 
+// Filter > Nodes: frames whose DBC sender / LDF publisher is unticked are hidden.
+bool node_accepts(const TraceFilter& f, const App& app, const BusMessage& m)
+{
+    return f.hidden_nodes.empty() || !f.hidden_nodes.contains(db_text(app, m).sender);
+}
+
 // Columns the old TraceFilterModel searched: ID (as shown: hex or decimal), name, channel, sender, type.
 bool text_matches(const App& app, std::string_view text, const BusMessage& m, bool decimal)
 {
@@ -289,7 +300,7 @@ bool proto_accepts(const TraceWindowState& s, const App& app, const ProtocolMess
         return s.filter.text.empty();
     }
     const BusMessage& f = pm.raw_frames.front();
-    return dialog_accepts(s.filter, f)
+    return dialog_accepts(s.filter, f) && node_accepts(s.filter, app, f)
            && (s.filter.text.empty() || smart_contains(pm.name, s.filter.text) || text_matches(app, s.filter.text, f, s.decimal));
 }
 
@@ -414,7 +425,7 @@ void reset_views(TraceWindowState& s, uint64_t begin)
 bool trace_filter_active(const TraceFilter& f) noexcept
 {
     return !f.text.empty() || !f.show_tx || !f.show_rx || !f.hidden_ids.empty() || !f.hidden_lin_ids.empty()
-           || !f.hidden_ifaces.empty();
+           || !f.hidden_ifaces.empty() || !f.hidden_nodes.empty();
 }
 
 // File view: one aggregated row per (channel, id) of the cache index, with its last two frames and
@@ -614,7 +625,8 @@ double cycle_stats_median(const CycleStats& c)
 
 bool trace_filter_accepts(const TraceWindowState& s, const App& app, const BusMessage& m)
 {
-    return dialog_accepts(s.filter, m) && (s.filter.text.empty() || text_matches(app, s.filter.text, m, s.decimal));
+    return dialog_accepts(s.filter, m) && node_accepts(s.filter, app, m)
+           && (s.filter.text.empty() || text_matches(app, s.filter.text, m, s.decimal));
 }
 
 std::vector<uint16_t> trace_filter_ifaces(const TraceWindowState& s, const App& app)
@@ -783,6 +795,7 @@ constexpr Align column_align(int col)
     case col_cycle_median: return Align::Right;
     case col_name:
     case col_data:
+    case col_signals:
     case col_comment: return Align::Left;
     default: return Align::Center;
     }
@@ -912,6 +925,8 @@ void push_row_color(const Ctx& c, const BusMessage& m, float alpha)
     ImGui::PushStyleColor(ImGuiCol_Text, col);
 }
 
+void append_signals(std::string& b, const App& app, const BusMessage& m);
+
 // Every column of a frame except Index. prev_ts: for Delta; prev: for changed bytes (or null).
 void frame_cells(Ctx& c, const BusMessage& m, int64_t prev_ts, const BusMessage* prev, float alpha,
                  std::string_view name_override = {})
@@ -948,6 +963,12 @@ void frame_cells(Ctx& c, const BusMessage& m, int64_t prev_ts, const BusMessage*
         append_error_flags(b, m.errors); // append_data writes nothing for an empty error frame
     }
     data_cell(c, b, prev != nullptr ? trace_changed_mask(m, *prev) : 0, alpha);
+    if (ImGui::TableGetColumnFlags(col_signals) & ImGuiTableColumnFlags_IsEnabled)
+    {
+        b.clear();
+        append_signals(b, c.app, m);
+        cell(col_signals, b);
+    }
     std::string_view comment = db.comment;
     cell(col_comment, comment.substr(0, comment.find('\n')));
 }
@@ -990,6 +1011,10 @@ void setup_columns(bool sortable, int count)
         if (sortable && i == col_id)
         {
             f |= ImGuiTableColumnFlags_DefaultSort;
+        }
+        if (count == col_agg_count && i == col_signals)
+        {
+            f |= ImGuiTableColumnFlags_Disabled; // Monitor decodes under the expanded id; the column is for the Log view
         }
         if (!sortable || i == col_cycle_median) // median sorting would nth_element per compare
         {
@@ -1153,6 +1178,95 @@ void append_signal_value(std::string& b, uint64_t raw, std::string_view value_na
     }
 }
 
+// "Speed=12.5 km/h  Gear=Drive (3)": the decodable signals of the frame, muxed-out ones skipped.
+void append_signals(std::string& b, const App& app, const BusMessage& m)
+{
+    const auto sep = [&] { if (!b.empty()) { b += "  "; } };
+    if (m.type == BusType::LIN)
+    {
+        const LinFrame* f = setup_find_lin_frame(app.setup, m);
+        if (f == nullptr)
+        {
+            return;
+        }
+        for (const LinSignal& sig : f->signals)
+        {
+            sep();
+            b += sig.name;
+            b += '=';
+            const uint64_t raw = lin_signal_extract_raw(sig, std::span(m.data.data(), m.len));
+            append_signal_value(b, raw, lin_signal_value_name(sig, raw), lin_signal_raw_to_physical(sig, raw), sig.unit, false);
+        }
+        return;
+    }
+    const CanDbMessage* d = setup_find_can_message(app.setup, m);
+    if (d == nullptr)
+    {
+        return;
+    }
+    for (const CanDbSignal& sig : d->signals)
+    {
+        if (!can_signal_present(*d, sig, m))
+        {
+            continue;
+        }
+        sep();
+        b += sig.name;
+        b += '=';
+        trace_append_signal_value(b, sig, can_signal_extract_raw(sig, m));
+    }
+}
+
+// Right-click on a signal row of the Monitor: plot the signal in one of the tab's graphs.
+void signal_context_menu(Ctx& c, const CanDbMessage& d, const CanDbSignal& sig)
+{
+    ImGui::PushID(&sig);
+    if (ImGui::TableGetHoveredRow() == ImGui::TableGetRowIndex() && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+    {
+        ImGui::OpenPopup("##signal");
+    }
+    if (ImGui::BeginPopup("##signal"))
+    {
+        // The entry the graph re-resolves the signal by: the network whose database holds d.
+        const Setup& setup = c.app.setup;
+        std::optional<std::size_t> network;
+        for (std::size_t n = 0; n < setup.networks.size() && !network; ++n)
+        {
+            for (const auto& db : setup.networks[n].can_dbs)
+            {
+                if (const auto it = db->messages.find(d.raw_id); it != db->messages.end() && &it->second == &d)
+                {
+                    network = n;
+                    break;
+                }
+            }
+        }
+        WorkspaceTab* tab = workspace_current(c.app.workspace);
+        const SignalEntry e{.label = d.name + '.' + sig.name, .network = network.value_or(0), .raw_id = d.raw_id,
+                            .can_msg = &d, .can_sig = &sig};
+        ImGui::TextDisabled("%s", e.label.c_str());
+        ImGui::Separator();
+        if (tab != nullptr && network)
+        {
+            for (GraphState& g : tab->graphs)
+            {
+                const std::string title = g.id == 0 ? std::string("Add to Graph") : std::format("Add to Graph {}", g.id);
+                const bool has = graph_has_signal(g, setup, e);
+                if (ImGui::MenuItem(title.c_str(), nullptr, has, !has))
+                {
+                    graph_add_signal(g, setup, e);
+                }
+            }
+            if (ImGui::MenuItem("Add to New Graph"))
+            {
+                graph_add_signal(graph_new(*tab), setup, e);
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
+}
+
 // Signal child rows under an aggregated frame (DBC / LDF), faded when muxed out.
 void signal_rows(Ctx& c, const BusMessage& m, float alpha)
 {
@@ -1206,6 +1320,7 @@ void signal_rows(Ctx& c, const BusMessage& m, float alpha)
         {
             ImGui::PopStyleColor();
         }
+        signal_context_menu(c, *d, sig);
     }
 }
 
@@ -1249,7 +1364,8 @@ bool agg_less(const App& app, const AggRow& a, const AggRow& b, int col)
     case col_direction: return has_flag(x, bus_flag::tx) < has_flag(y, bus_flag::tx);
     case col_type: return x.flags < y.flags;
     case col_sender: return db_text(app, x).sender < db_text(app, y).sender;
-    case col_name: return db_text(app, x).name < db_text(app, y).name;
+    case col_name:
+    case col_signals: return db_text(app, x).name < db_text(app, y).name;
     case col_dlc: return x.len < y.len;
     case col_data: return std::ranges::lexicographical_compare(std::span(x.data.data(), x.len), std::span(y.data.data(), y.len));
     case col_cycle_min: return a.cycle.min_ns < b.cycle.min_ns;
@@ -1729,6 +1845,38 @@ void draw_filter_popup(Ctx& c)
         ImGui::PopID();
     }
 
+    // Nodes: the senders (DBC) / publishers (LDF) of the frames seen so far.
+    std::set<std::string_view> nodes;
+    for (const AggRow& row : c.s.agg)
+    {
+        if (const std::string_view sender = db_text(c.app, row.last).sender; !sender.empty())
+        {
+            nodes.insert(sender);
+        }
+    }
+    if (!nodes.empty())
+    {
+        ImGui::SeparatorText("Nodes");
+        for (const std::string_view node : nodes)
+        {
+            bool shown = !f.hidden_nodes.contains(node);
+            ImGui::PushID(node.data(), node.data() + node.size());
+            if (ImGui::Checkbox(std::string(node).c_str(), &shown))
+            {
+                if (shown)
+                {
+                    f.hidden_nodes.erase(f.hidden_nodes.find(node));
+                }
+                else
+                {
+                    f.hidden_nodes.emplace(node);
+                }
+                changed = true;
+            }
+            ImGui::PopID();
+        }
+    }
+
     // ponytail: lists the ids seen in this trace, not every DBC/LDF message. Merge the setup's messages in if wanted.
     ImGui::SeparatorText("Messages");
     std::set<std::pair<bool, uint32_t>> seen; // (LIN, id)
@@ -1746,6 +1894,10 @@ void draw_filter_popup(Ctx& c)
     {
         f.hidden_ids.clear();
         f.hidden_lin_ids.clear();
+        if (show_all)
+        {
+            f.hidden_nodes.clear();
+        }
         for (const auto& [lin, id] : seen)
         {
             if (hide_all)
@@ -2013,6 +2165,10 @@ void trace_window_save_xml(const TraceWindowState& s, const std::deque<Iface>& i
             h.append_attribute("interface") = ifaces[i].info.name.c_str();
         }
     }
+    for (const std::string& node : s.filter.hidden_nodes)
+    {
+        el.append_child("hidden-node").append_attribute("name") = node.c_str();
+    }
 }
 
 void trace_window_load_xml(TraceWindowState& s, const std::deque<Iface>& ifaces, pugi::xml_node el)
@@ -2042,5 +2198,75 @@ void trace_window_load_xml(TraceWindowState& s, const std::deque<Iface>& ifaces,
             s.filter.hidden_ifaces.insert(static_cast<uint16_t>(i));
         }
     }
+    s.filter.hidden_nodes.clear();
+    for (const pugi::xml_node h : el.children("hidden-node"))
+    {
+        s.filter.hidden_nodes.emplace(h.attribute("name").as_string());
+    }
     s.filter_dirty = true;
+}
+
+int64_t trace_write_csv(const App& app, const std::string& path)
+{
+    std::ofstream out(std::filesystem::path(path), std::ios::binary);
+    if (!out)
+    {
+        return -1;
+    }
+    const auto quoted = [](std::string_view v) -> std::string
+    {
+        if (v.find_first_of(",\"\n") == std::string_view::npos)
+        {
+            return std::string(v);
+        }
+        std::string q = "\"";
+        for (const char ch : v)
+        {
+            q += ch;
+            if (ch == '"')
+            {
+                q += '"';
+            }
+        }
+        return q + '"';
+    };
+    out << "time,utc,channel,dir,type,id,sender,name,dlc,data,signals,comment\n";
+    const uint64_t n = trace_size(app.trace);
+    const int64_t first_ts = n > 0 ? trace_at(app.trace, 0).ts_ns : 0;
+    std::string b;
+    std::string line;
+    for (uint64_t i = 0; i < n; ++i)
+    {
+        const BusMessage m = trace_at(app.trace, i);
+        const DbText db = db_text(app, m);
+        line.clear();
+        std::format_to(std::back_inserter(line), "{:.6f},", static_cast<double>(m.ts_ns - first_ts) * 1e-9);
+        {
+            using namespace std::chrono;
+            std::format_to(std::back_inserter(line), "{:%Y-%m-%d %H:%M:%S},",
+                           floor<milliseconds>(sys_time<nanoseconds>(nanoseconds(m.ts_ns))));
+        }
+        line += quoted(iface_name(app, m.iface));
+        line += has_flag(m, bus_flag::tx) ? ",TX," : ",RX,";
+        append_type(line, m);
+        line += ',';
+        trace_append_id(line, m, false);
+        line += ',';
+        line += quoted(db.sender);
+        line += ',';
+        line += quoted(db.name);
+        std::format_to(std::back_inserter(line), ",{},", m.len);
+        b.clear();
+        trace_append_data(b, m, false);
+        line += b;
+        line += ',';
+        b.clear();
+        append_signals(b, app, m);
+        line += quoted(b);
+        line += ',';
+        line += quoted(db.comment.substr(0, db.comment.find('\n')));
+        line += '\n';
+        out << line;
+    }
+    return static_cast<int64_t>(n);
 }

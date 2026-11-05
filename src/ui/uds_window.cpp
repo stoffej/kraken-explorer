@@ -27,12 +27,14 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <sstream>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
 
 #include "app.h"
+#include "core/text.h"
 #include "ui/diag_dialog.h"
 #include "ui/raw_tx.h"
 #include "ui/script_window.h"
@@ -108,7 +110,7 @@ void log_line(App& app, UdsWindow& w, const std::string& line)
             w.log_start = std::chrono::steady_clock::now();
         }
         const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - w.log_start).count();
-        w.log += std::format("{:9.3f}  {}\n", t, line);
+        w.log.push_back(std::format("{:9.3f}  {}", t, line));
         ++w.log_total;
     }
     if (app.tasks.wake != nullptr)
@@ -206,6 +208,17 @@ std::optional<UdsTarget> current_target(const UdsWindow& w)
     return t;
 }
 
+// " (name)" of the DID a 22 / 2E / 2F request addresses when the loaded DID text file names it.
+std::string did_note(const std::map<uint32_t, std::string>& names, std::span<const uint8_t> req)
+{
+    if (names.empty() || req.size() < 3 || (req[0] != 0x22 && req[0] != 0x2E && req[0] != 0x2F))
+    {
+        return {};
+    }
+    const auto it = names.find(static_cast<uint32_t>(req[1] << 8 | req[2]));
+    return it != names.end() && !it->second.empty() ? std::format(" ({})", it->second) : std::string();
+}
+
 void send_request(App& app, UdsWindow& w, std::vector<uint8_t> req)
 {
     const std::optional<UdsTarget> t = current_target(w);
@@ -215,9 +228,10 @@ void send_request(App& app, UdsWindow& w, std::vector<uint8_t> req)
     }
     const UdsTiming timing = timing_of(w);
     auto dtc_names = w.dtc_names; // snapshot: the worker must not read the map the main thread edits
-    post(app, w, [&app, &w, t = *t, req = std::move(req), timing, dtc_names = std::move(dtc_names)]
+    std::string did = did_note(w.did_names, req);
+    post(app, w, [&app, &w, t = *t, req = std::move(req), timing, dtc_names = std::move(dtc_names), did = std::move(did)]
     {
-        log_line(app, w, std::format("{}  >> {}  {}", target_text(t), format_hex_bytes(req), uds_describe_request(req)));
+        log_line(app, w, std::format("{}  >> {}  {}{}", target_text(t), format_hex_bytes(req), uds_describe_request(req), did));
         const UdsResult r = uds_request(app.uds_client, [&app](const BusMessage& m) { return uds_send(app, m); }, t, req, timing);
         if (!r.error.empty())
         {
@@ -238,7 +252,7 @@ void send_request(App& app, UdsWindow& w, std::vector<uint8_t> req)
         }
         else
         {
-            text = uds_describe(req, r.response);
+            text = uds_describe(req, r.response) + did;
         }
         for (std::size_t at = text.find('\n'); at != std::string::npos; at = text.find('\n', at + 1))
         {
@@ -443,42 +457,10 @@ int load_dtc_file(std::map<uint32_t, std::string>& out, const std::string& path)
     {
         return -1;
     }
+    std::ostringstream text;
+    text << in.rdbuf();
     out.clear();
-    std::string line;
-    while (std::getline(in, line))
-    {
-        std::size_t i = line.find_first_not_of(" \t");
-        if (i == std::string::npos || line[i] == '#')
-        {
-            continue;
-        }
-        const std::size_t code_end = line.find_first_of(" \t,;", i);
-        std::string code = line.substr(i, code_end - i);
-        if (code.starts_with("0x") || code.starts_with("0X"))
-        {
-            code = code.substr(2);
-        }
-        uint32_t id = 0;
-        const auto [p, ec] = std::from_chars(code.data(), code.data() + code.size(), id, 16);
-        if (ec != std::errc{} || p != code.data() + code.size())
-        {
-            continue;
-        }
-        std::string text;
-        if (code_end != std::string::npos)
-        {
-            const std::size_t t = line.find_first_not_of(" \t,;", code_end);
-            if (t != std::string::npos)
-            {
-                text = line.substr(t);
-                while (!text.empty() && (text.back() == '\r' || text.back() == ' '))
-                {
-                    text.pop_back();
-                }
-            }
-        }
-        out[id] = text;
-    }
+    parse_code_lines(text.str(), out);
     return static_cast<int>(out.size());
 }
 
@@ -518,260 +500,349 @@ std::vector<uint8_t> concat(std::initializer_list<uint8_t> head, std::span<const
 
 // --- tabs ---
 
-void draw_services_tab(App& app, UdsWindow& w, bool ok)
+// One service tab: its body is disabled without a target.
+bool begin_section(const char* label, bool ok)
+{
+    if (!ImGui::BeginTabItem(label))
+    {
+        return false;
+    }
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!ok);
+    return true;
+}
+
+void end_section()
+{
+    ImGui::EndDisabled();
+    ImGui::EndTabItem();
+}
+
+// The service tabs of the window's tab bar (the caller has begun it), DTC first: reading and
+// clearing trouble codes is what the window is mostly used for.
+void draw_service_tabs(App& app, UdsWindow& w, bool ok)
 {
     const float em = ImGui::GetFontSize();
-    ImGui::BeginDisabled(!ok);
+    const ImGuiStyle& style = ImGui::GetStyle();
+    // More air than the default style: the rows are dense button strips.
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x * 1.5f, style.ItemSpacing.y * 2.0f));
 
-    ImGui::SeparatorText("Session & reset");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Session");
-    ImGui::SameLine();
-    for (const auto& [label, sub] : {std::pair{"Default", 0x01}, {"Programming", 0x02}, {"Extended", 0x03}})
+    if (begin_section("DTC", ok))
     {
-        if (ImGui::Button(label))
-        {
-            send_request(app, w, {0x10, static_cast<uint8_t>(sub)});
-        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Report");
         ImGui::SameLine();
-    }
-    {
-        const std::scoped_lock lock(w.mutex);
-        ImGui::Checkbox("Tester present", &w.tester_present);
-    }
-    ImGui::SetItemTooltip("3E 80 every 2 s to the selected ECU, keeps a non-default session open");
-    if (w.tester_present)
-    {
-        ensure_worker(app, w); // it sends them
-    }
+        ImGui::SetNextItemWidth(em * 12.0f);
+        ImGui::Combo("##dtcreport", &w.dtc_report,
+                     "count (01)\0by status (02)\0supported (0A)\0snapshot (04)\0extended (06)\0");
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Status mask");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 3.0f);
+        ImGui::InputText("##dtcmask", &w.dtc_mask, ImGuiInputTextFlags_CharsHexadecimal);
+        ImGui::SetItemTooltip("status mask for 01/02/0A");
+        ImGui::SameLine();
+        ImGui::TextUnformatted("DTC");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 5.0f);
+        ImGui::InputTextWithHint("##dtccode", "DTC", &w.dtc_code, ImGuiInputTextFlags_CharsHexadecimal);
+        ImGui::SetItemTooltip("3-byte DTC for 04/06");
 
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Reset");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 10.0f);
-    ImGui::Combo("##reset", &w.reset_kind, "hard\0keyOffOn\0soft\0");
-    ImGui::SameLine();
-    if (ImGui::Button("ECU Reset"))
-    {
-        send_request(app, w, {0x11, static_cast<uint8_t>(w.reset_kind + 1)});
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Tester Present"))
-    {
-        send_request(app, w, {0x3E, 0x00});
-    }
-
-    ImGui::SeparatorText("Read / write data");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("DID");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 4.0f);
-    ImGui::InputText("##did", &w.did, ImGuiInputTextFlags_CharsHexadecimal);
-    const auto did = hex_field(w.did, 2);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!did);
-    if (ImGui::Button("Read"))
-    {
-        send_request(app, w, concat({0x22}, *did));
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 14.0f);
-    ImGui::InputTextWithHint("##did_data", "data (hex)", &w.did_data);
-    const auto did_data = parse_hex_bytes(w.did_data);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!did_data || did_data->empty());
-    if (ImGui::Button("Write"))
-    {
-        send_request(app, w, concat({0x2E}, *did, *did_data));
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-
-    ImGui::SeparatorText("Diagnostic trouble codes");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("DTC");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 12.0f);
-    ImGui::Combo("##dtcreport", &w.dtc_report,
-                 "count (01)\0by status (02)\0supported (0A)\0snapshot (04)\0extended (06)\0");
-    ImGui::SameLine();
-    if (ImGui::Button("Read DTCs"))
-    {
-        static constexpr std::array<uint8_t, 5> sub = {0x01, 0x02, 0x0A, 0x04, 0x06};
-        const uint8_t s = sub[static_cast<std::size_t>(std::clamp(w.dtc_report, 0, 4))];
-        if (s == 0x04 || s == 0x06) // need a DTC + (04) record number / (06) record 0xFF
+        const ImVec2 big(em * 9.0f, ImGui::GetFrameHeight() * 1.4f);
+        if (ImGui::Button("Read DTCs", big))
         {
-            const auto code = hex_field(w.dtc_code, 3);
-            if (code)
+            static constexpr std::array<uint8_t, 5> sub = {0x01, 0x02, 0x0A, 0x04, 0x06};
+            const uint8_t s = sub[static_cast<std::size_t>(std::clamp(w.dtc_report, 0, 4))];
+            if (s == 0x04 || s == 0x06) // need a DTC + (04) record number / (06) record 0xFF
             {
-                send_request(app, w, concat({0x19, s}, *code, std::array<uint8_t, 1>{0xFF}));
+                const auto code = hex_field(w.dtc_code, 3);
+                if (code)
+                {
+                    send_request(app, w, concat({0x19, s}, *code, std::array<uint8_t, 1>{0xFF}));
+                }
+            }
+            else
+            {
+                const uint8_t mask = parse_u8_hex(w.dtc_mask).value_or(0xFF);
+                send_request(app, w, {0x19, s, mask});
             }
         }
-        else
-        {
-            const uint8_t mask = parse_u8_hex(w.dtc_mask).value_or(0xFF);
-            send_request(app, w, {0x19, s, mask});
-        }
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 3.0f);
-    ImGui::InputText("##dtcmask", &w.dtc_mask, ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::SetItemTooltip("status mask for 01/02/0A");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 5.0f);
-    ImGui::InputTextWithHint("##dtccode", "DTC", &w.dtc_code, ImGuiInputTextFlags_CharsHexadecimal);
-    ImGui::SetItemTooltip("3-byte DTC for 04/06");
-    ImGui::SameLine();
-    if (ImGui::Button("Clear DTCs"))
-    {
-        send_request(app, w, {0x14, 0xFF, 0xFF, 0xFF});
-    }
-    ImGui::SetItemTooltip("14 FF FF FF: all groups");
-
-    // DTC text file: codes read by "Read DTCs" get their description from it.
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("DTC text");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 20.0f);
-    ImGui::InputTextWithHint("##dtcfile", "path to a 'code text' file", &w.dtc_file);
-    ImGui::SameLine();
-    if (ImGui::Button("Load##dtc"))
-    {
-        const int n = load_dtc_file(w.dtc_names, w.dtc_file);
-        log_line(app, w, n < 0 ? std::format("DTC file: cannot open {}", w.dtc_file)
-                               : std::format("DTC file: loaded {} code(s) from {}", n, w.dtc_file));
-    }
-    ImGui::SetItemTooltip("One \"<hex code> <text>\" per line, e.g. \"F00016 Oil pressure low\".\n"
-                          "# lines are comments. Read DTCs then shows each code's text.");
-    if (!w.dtc_names.empty())
-    {
         ImGui::SameLine();
-        ImGui::TextDisabled("%zu codes", w.dtc_names.size());
-    }
-
-    ImGui::SeparatorText("Routine & control");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Routine");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 4.0f);
-    ImGui::InputText("##rid", &w.routine, ImGuiInputTextFlags_CharsHexadecimal);
-    const auto rid = hex_field(w.routine, 2);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 10.0f);
-    ImGui::InputTextWithHint("##rid_data", "options (hex)", &w.routine_data);
-    const auto rid_data = parse_hex_bytes(w.routine_data);
-    ImGui::BeginDisabled(!rid || !rid_data);
-    for (const auto& [label, sub] : {std::pair{"Start", 0x01}, {"Stop", 0x02}, {"Results", 0x03}})
-    {
-        ImGui::SameLine();
-        if (ImGui::Button(label))
+        if (ImGui::Button("Clear DTCs", big))
         {
-            send_request(app, w, concat({0x31, static_cast<uint8_t>(sub)}, *rid, *rid_data));
+            send_request(app, w, {0x14, 0xFF, 0xFF, 0xFF});
         }
-    }
-    ImGui::EndDisabled();
+        ImGui::SetItemTooltip("14 FF FF FF: all groups");
 
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("I/O");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 4.0f);
-    ImGui::InputText("##io_did", &w.io_did, ImGuiInputTextFlags_CharsHexadecimal);
-    const auto io_did = hex_field(w.io_did, 2);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 10.0f);
-    ImGui::InputTextWithHint("##io_data", "control+state (hex)", &w.io_data);
-    const auto io_data = parse_hex_bytes(w.io_data);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!io_did);
-    if (ImGui::Button("returnControl"))
-    {
-        send_request(app, w, concat({0x2F}, *io_did, std::array<uint8_t, 1>{0x00}));
+        // DTC text file: codes read by "Read DTCs" get their description from it.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("DTC text");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 20.0f);
+        ImGui::InputTextWithHint("##dtcfile", "path to a 'code text' file", &w.dtc_file);
+        ImGui::SameLine();
+        if (ImGui::Button("Load##dtc"))
+        {
+            const int n = load_dtc_file(w.dtc_names, w.dtc_file);
+            log_line(app, w, n < 0 ? std::format("DTC file: cannot open {}", w.dtc_file)
+                                   : std::format("DTC file: loaded {} code(s) from {}", n, w.dtc_file));
+        }
+        ImGui::SetItemTooltip("One \"<hex code> <text>\" per line, e.g. \"F00016 Oil pressure low\".\n"
+                              "# lines are comments. Read DTCs then shows each code's text.");
+        if (!w.dtc_names.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%zu codes", w.dtc_names.size());
+        }
+        end_section();
     }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!io_data || io_data->empty());
-    if (ImGui::Button("shortTermAdjust"))
-    {
-        send_request(app, w, concat({0x2F}, *io_did, concat({0x03}, *io_data)));
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
 
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Memory");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 8.0f);
-    ImGui::InputTextWithHint("##mem_addr", "addr", &w.mem_addr, ImGuiInputTextFlags_CharsHexadecimal);
-    const auto maddr = parse_hex_bytes(w.mem_addr);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 5.0f);
-    ImGui::InputTextWithHint("##mem_size", "size", &w.mem_size, ImGuiInputTextFlags_CharsHexadecimal);
-    const auto msize = parse_hex_bytes(w.mem_size);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!maddr || !msize || maddr->empty() || msize->empty() || maddr->size() > 15 || msize->size() > 15);
-    if (ImGui::Button("Read mem"))
+    if (begin_section("Session", ok))
     {
-        // 23 <ALFID> <addr..> <size..>: ALFID high nibble = size bytes, low nibble = addr bytes.
-        const uint8_t alfid = static_cast<uint8_t>((msize->size() << 4) | maddr->size());
-        send_request(app, w, concat({0x23, alfid}, *maddr, *msize));
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 10.0f);
-    ImGui::InputTextWithHint("##mem_data", "data (hex)", &w.mem_data);
-    const auto mdata = parse_hex_bytes(w.mem_data);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!mdata || mdata->empty());
-    if (ImGui::Button("Write mem"))
-    {
-        const uint8_t alfid = static_cast<uint8_t>((msize->size() << 4) | maddr->size());
-        send_request(app, w, concat({0x3D, alfid}, *maddr, concat({}, *msize, *mdata)));
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Session");
+        ImGui::SameLine();
+        for (const auto& [label, sub] : {std::pair{"Default", 0x01}, {"Programming", 0x02}, {"Extended", 0x03}})
+        {
+            if (ImGui::Button(label))
+            {
+                send_request(app, w, {0x10, static_cast<uint8_t>(sub)});
+            }
+            ImGui::SameLine();
+        }
+        {
+            const std::scoped_lock lock(w.mutex);
+            ImGui::Checkbox("Tester present", &w.tester_present);
+        }
+        ImGui::SetItemTooltip("3E 80 every 2 s to the selected ECU, keeps a non-default session open");
+        ImGui::SameLine();
+        if (ImGui::Button("Tester Present"))
+        {
+            send_request(app, w, {0x3E, 0x00});
+        }
+        ImGui::SetItemTooltip("one 3E 00 now");
 
-    ImGui::SeparatorText("Security access");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Security");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 3.0f);
-    ImGui::InputText("##sec_level", &w.sec_level, ImGuiInputTextFlags_CharsHexadecimal);
-    const auto level = parse_u8_hex(w.sec_level);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!level);
-    if (ImGui::Button("Request seed"))
-    {
-        send_request(app, w, {0x27, static_cast<uint8_t>(*level | 1)}); // odd sub-function requests the seed
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Reset");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 10.0f);
+        ImGui::Combo("##reset", &w.reset_kind, "hard\0keyOffOn\0soft\0");
+        ImGui::SameLine();
+        if (ImGui::Button("ECU Reset"))
+        {
+            send_request(app, w, {0x11, static_cast<uint8_t>(w.reset_kind + 1)});
+        }
+        end_section();
     }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 12.0f);
-    ImGui::InputTextWithHint("##sec_key", "key (hex)", &w.sec_key);
-    const auto key = parse_hex_bytes(w.sec_key);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!level || !key || key->empty());
-    if (ImGui::Button("Send key"))
+    if (w.tester_present)
     {
-        send_request(app, w, concat({0x27, static_cast<uint8_t>((*level | 1) + 1)}, *key));
+        ensure_worker(app, w); // it sends them, also while the section is folded
     }
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("No key algorithm is built in: compute the key from the seed yourself\n"
-                          "(or in a Python script) and paste it here. Last seed is shown in the log.");
 
-    ImGui::SeparatorText("Raw request");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Raw");
-    ImGui::SameLine();
-    const auto raw = parse_hex_bytes(w.raw);
-    ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Send").x - ImGui::GetStyle().FramePadding.x * 2.0f - ImGui::GetStyle().ItemSpacing.x);
-    const bool enter = ImGui::InputTextWithHint("##raw", "request bytes (hex), Enter sends", &w.raw, ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!raw || raw->empty());
-    if ((ImGui::Button("Send") || enter) && raw && !raw->empty())
+    if (begin_section("DID", ok))
     {
-        send_request(app, w, *raw);
-    }
-    ImGui::EndDisabled();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("DID");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 4.0f);
+        ImGui::InputText("##did", &w.did, ImGuiInputTextFlags_CharsHexadecimal);
+        const auto did = hex_field(w.did, 2);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!did);
+        if (ImGui::Button("Read"))
+        {
+            send_request(app, w, concat({0x22}, *did));
+        }
+        if (did)
+        {
+            // The DID's name: the per-product file first, then the ISO 14229 standard DIDs.
+            const uint16_t d = static_cast<uint16_t>((*did)[0] << 8 | (*did)[1]);
+            const auto it = w.did_names.find(d);
+            const std::string_view name = it != w.did_names.end() ? std::string_view(it->second) : uds_did_name(d);
+            if (!name.empty())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%.*s", static_cast<int>(name.size()), name.data());
+            }
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Data");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 14.0f);
+        ImGui::InputTextWithHint("##did_data", "data (hex)", &w.did_data);
+        const auto did_data = parse_hex_bytes(w.did_data);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!did_data || did_data->empty());
+        if (ImGui::Button("Write"))
+        {
+            send_request(app, w, concat({0x2E}, *did, *did_data));
+        }
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
 
-    ImGui::EndDisabled(); // !ok
+        // DID text file, per product: the names shown next to the field and in the log.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("DID text");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 20.0f);
+        ImGui::InputTextWithHint("##didfile", "path to a 'DID name' file", &w.did_file);
+        ImGui::SameLine();
+        if (ImGui::Button("Load##did"))
+        {
+            const int n = load_dtc_file(w.did_names, w.did_file);
+            log_line(app, w, n < 0 ? std::format("DID file: cannot open {}", w.did_file)
+                                   : std::format("DID file: loaded {} DID(s) from {}", n, w.did_file));
+        }
+        ImGui::SetItemTooltip("One \"<hex DID> <name>\" per line, e.g. \"F190 VIN\", # lines are comments.\n"
+                              "scripts/kraken_mcp.py write_did_file writes one per product.");
+        if (!w.did_names.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%zu DIDs", w.did_names.size());
+        }
+        end_section();
+    }
+
+    if (begin_section("Routine / I/O / Memory", ok))
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Routine");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 4.0f);
+        ImGui::InputText("##rid", &w.routine, ImGuiInputTextFlags_CharsHexadecimal);
+        const auto rid = hex_field(w.routine, 2);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 10.0f);
+        ImGui::InputTextWithHint("##rid_data", "options (hex)", &w.routine_data);
+        const auto rid_data = parse_hex_bytes(w.routine_data);
+        ImGui::BeginDisabled(!rid || !rid_data);
+        for (const auto& [label, sub] : {std::pair{"Start", 0x01}, {"Stop", 0x02}, {"Results", 0x03}})
+        {
+            ImGui::SameLine();
+            if (ImGui::Button(label))
+            {
+                send_request(app, w, concat({0x31, static_cast<uint8_t>(sub)}, *rid, *rid_data));
+            }
+        }
+        ImGui::EndDisabled();
+
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("I/O");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 4.0f);
+        ImGui::InputText("##io_did", &w.io_did, ImGuiInputTextFlags_CharsHexadecimal);
+        const auto io_did = hex_field(w.io_did, 2);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 10.0f);
+        ImGui::InputTextWithHint("##io_data", "control+state (hex)", &w.io_data);
+        const auto io_data = parse_hex_bytes(w.io_data);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!io_did);
+        if (ImGui::Button("returnControl"))
+        {
+            send_request(app, w, concat({0x2F}, *io_did, std::array<uint8_t, 1>{0x00}));
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!io_data || io_data->empty());
+        if (ImGui::Button("shortTermAdjust"))
+        {
+            send_request(app, w, concat({0x2F}, *io_did, concat({0x03}, *io_data)));
+        }
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Memory");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 8.0f);
+        ImGui::InputTextWithHint("##mem_addr", "addr", &w.mem_addr, ImGuiInputTextFlags_CharsHexadecimal);
+        const auto maddr = parse_hex_bytes(w.mem_addr);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 5.0f);
+        ImGui::InputTextWithHint("##mem_size", "size", &w.mem_size, ImGuiInputTextFlags_CharsHexadecimal);
+        const auto msize = parse_hex_bytes(w.mem_size);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!maddr || !msize || maddr->empty() || msize->empty() || maddr->size() > 15 || msize->size() > 15);
+        if (ImGui::Button("Read mem"))
+        {
+            // 23 <ALFID> <addr..> <size..>: ALFID high nibble = size bytes, low nibble = addr bytes.
+            const uint8_t alfid = static_cast<uint8_t>((msize->size() << 4) | maddr->size());
+            send_request(app, w, concat({0x23, alfid}, *maddr, *msize));
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 10.0f);
+        ImGui::InputTextWithHint("##mem_data", "data (hex)", &w.mem_data);
+        const auto mdata = parse_hex_bytes(w.mem_data);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!mdata || mdata->empty());
+        if (ImGui::Button("Write mem"))
+        {
+            const uint8_t alfid = static_cast<uint8_t>((msize->size() << 4) | maddr->size());
+            send_request(app, w, concat({0x3D, alfid}, *maddr, concat({}, *msize, *mdata)));
+        }
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        end_section();
+    }
+
+    if (begin_section("Security", ok))
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Level");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 3.0f);
+        ImGui::InputText("##sec_level", &w.sec_level, ImGuiInputTextFlags_CharsHexadecimal);
+        const auto level = parse_u8_hex(w.sec_level);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!level);
+        if (ImGui::Button("Request seed"))
+        {
+            send_request(app, w, {0x27, static_cast<uint8_t>(*level | 1)}); // odd sub-function requests the seed
+        }
+        ImGui::EndDisabled();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Key");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(em * 12.0f);
+        ImGui::InputTextWithHint("##sec_key", "key (hex)", &w.sec_key);
+        const auto key = parse_hex_bytes(w.sec_key);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!level || !key || key->empty());
+        if (ImGui::Button("Send key"))
+        {
+            send_request(app, w, concat({0x27, static_cast<uint8_t>((*level | 1) + 1)}, *key));
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("No key algorithm is built in: compute the key from the seed yourself\n"
+                              "(or in a Python script) and paste it here. Last seed is shown in the log.");
+        end_section();
+    }
+
+    if (begin_section("Raw", ok))
+    {
+        const auto raw = parse_hex_bytes(w.raw);
+        ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Send").x - style.FramePadding.x * 2.0f - style.ItemSpacing.x * 1.5f);
+        const bool enter = ImGui::InputTextWithHint("##raw", "request bytes (hex), Enter sends", &w.raw, ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!raw || raw->empty());
+        if ((ImGui::Button("Send") || enter) && raw && !raw->empty())
+        {
+            send_request(app, w, *raw);
+        }
+        ImGui::EndDisabled();
+        // What the typed bytes mean, so a hand-written request can be checked before it goes out.
+        const std::string meaning = !w.raw.empty() && !raw ? std::string("not hex bytes")
+            : raw && !raw->empty() ? uds_describe_request(*raw) + did_note(w.did_names, *raw) : std::string();
+        if (!meaning.empty())
+        {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", meaning.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        end_section();
+    }
+
+    ImGui::PopStyleVar();
 }
 
 void draw_scan_tab(App& app, UdsWindow& w, bool busy)
@@ -995,7 +1066,13 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
         if (w.log_total != w.log_seen)
         {
             w.log_seen = w.log_total;
-            w.log_view = w.log;
+            if (w.log_clears != w.log_clears_seen)
+            {
+                w.log_clears_seen = w.log_clears;
+                w.log_view.clear();
+            }
+            // Only the new entries are copied: a sweep logs thousands of lines.
+            w.log_view.insert(w.log_view.end(), w.log.begin() + static_cast<std::ptrdiff_t>(w.log_view.size()), w.log.end());
             changed = true;
         }
         busy = w.busy;
@@ -1076,21 +1153,14 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
     {
         if (ImGui::BeginTabBar("##uds_tabs"))
         {
-            if (ImGui::BeginTabItem("Services"))
-            {
-                w.tab = 0;
-                draw_services_tab(app, w, ok);
-                ImGui::EndTabItem();
-            }
+            draw_service_tabs(app, w, ok);
             if (ImGui::BeginTabItem("Scan"))
             {
-                w.tab = 1;
                 draw_scan_tab(app, w, busy);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Transport"))
             {
-                w.tab = 2;
                 draw_transport_tab(w);
                 ImGui::EndTabItem();
             }
@@ -1105,6 +1175,7 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
         const std::scoped_lock lock(w.mutex);
         w.log.clear();
         ++w.log_total;
+        ++w.log_clears;
     }
     if (busy)
     {
@@ -1112,8 +1183,79 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
         ImGui::TextDisabled("waiting for the ECU...");
     }
 
+    ImGui::SameLine();
+    if (ImGui::Button("Copy log"))
+    {
+        std::string all;
+        for (const std::string& e : w.log_view)
+        {
+            all += e;
+            all += '\n';
+        }
+        ImGui::SetClipboardText(all.c_str());
+    }
+    ImGui::SetItemTooltip("The whole log to the clipboard. Text inside one entry can also be selected and copied with Ctrl+C.");
+
+    // One striped row per entry, each a read-only text box so text can be selected and copied.
+    // Rows outside the view are skipped by their cached heights: a sweep logs thousands of entries.
     ImGui::PushFont(app.fonts.mono, 0.0f);
-    draw_console_box("##log", w.log_view, -FLT_MIN, -FLT_MIN, changed, w.log_follow, w.log_active);
+    if (ImGui::BeginChild("##log", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_Borders))
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, 0); // the stripe is the background
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 0.0f)); // rows stack by their heights
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float wrap = width - style.FramePadding.x * 2.0f;
+        if (wrap != w.log_wrap)
+        {
+            w.log_heights.clear();
+            w.log_wrap = wrap;
+        }
+        w.log_heights.resize(std::min(w.log_heights.size(), w.log_view.size()));
+        for (std::size_t i = w.log_heights.size(); i < w.log_view.size(); ++i)
+        {
+            w.log_heights.push_back(ImGui::CalcTextSize(w.log_view[i].c_str(), nullptr, false, wrap).y + style.FramePadding.y * 2.0f);
+        }
+        const float top = ImGui::GetScrollY();
+        const float bottom = top + ImGui::GetWindowHeight();
+        const ImU32 stripe[2] = {ImGui::GetColorU32(ImGuiCol_TableRowBg), ImGui::GetColorU32(ImGuiCol_TableRowBgAlt)};
+        float y = 0.0f;
+        float skipped = 0.0f;
+        for (std::size_t i = 0; i < w.log_view.size(); ++i)
+        {
+            const float h = w.log_heights[i];
+            if (y + h < top || y > bottom)
+            {
+                skipped += h;
+            }
+            else
+            {
+                if (skipped > 0.0f)
+                {
+                    ImGui::Dummy(ImVec2(0.0f, skipped));
+                    skipped = 0.0f;
+                }
+                const ImVec2 pos = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + h), stripe[i & 1]);
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::InputTextMultiline("##e", &w.log_view[i], ImVec2(-FLT_MIN, h), ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
+                ImGui::PopID();
+            }
+            y += h;
+        }
+        if (skipped > 0.0f)
+        {
+            ImGui::Dummy(ImVec2(0.0f, skipped));
+        }
+        if (changed && w.log_follow)
+        {
+            ImGui::SetScrollHereY(1.0f);
+        }
+        w.log_follow = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
+    ImGui::EndChild();
     ImGui::PopFont();
     ImGui::End();
 }

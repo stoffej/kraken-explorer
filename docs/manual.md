@@ -30,13 +30,14 @@ _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 *   **Instrument Panel** (Window > New > Instrument Panel): gauge, bar, LED, numeric, text and trend displays plus button, slider and checkbox inputs, bound to DBC signals and placed on a grid. **Edit** mode arranges widgets and sets their properties; in **Run** mode inputs send the signal on the chosen interface. Saved with the workspace.
 *   **Watch** (Window > New > Watch): a list of the signals to keep an eye on, picked with the fuzzy finder: last value (the value table's name when it has one), unit, min / max and reception count. A value that changed since the reception before stands out. Right-click a row to remove or move it, **Reset** forgets the values. CAN signals, live traffic; saved with the workspace.
 *   **Macros** (Measurement > Macros...): named lists of steps, each run by its own key (F7, Ctrl+Shift+1, ...) or the Run button: **Send** a frame on an interface, **Wait** some ms, a menu **Command** (start / stop the measurement, record, clear, ...) or a Python **Script** (loaded into the Script window and run there). A macro that is still running is not started again; Stop ends it at its next step. Macros and their keys are saved with the workspace, so every project has its own; the shortcuts of the menu commands stay global (Settings > Shortcuts).
+*   **Signals column**: every row of the Trace window's Log view decodes its DBC / LDF signals next to the raw bytes (the Monitor view has them under the expanded id), `Speed=12.5 km/h  Gear=Drive (3)`; **Trace > Save Trace to File** as `.csv` writes the same columns (time, channel, id, sender, name, data, signals, comment) for a spreadsheet or pandas. The **Filter** popup hides frames by interface, by **node** (DBC sender / LDF publisher) and by message id. In the Monitor view a right-click on a signal row under an expanded id adds the signal to a graph.
 *   **Filtering & Recording**: Live filters in the trace; record every frame straight to disk (Vector ASC, candump, PCAPng, PEAK TRC) independent of the in-memory trace size.
 *   **Measurement start**: With no interface enabled, or when none of the enabled ones opens, a "Cannot start measurement" dialog says why, with a **Setup Interface...** button; when only some open, the measurement starts and the status bar names the missing ones.
 *   **Python Scripting**: Built-in script window with an embedded Python interpreter (pybind11); its console is a text box, so output and tracebacks can be selected and copied (mouse, Ctrl+A, Ctrl+C). Send and receive CAN and LIN messages, decode signals using the loaded DBC/LDF files and automate tasks. Example scripts are in `examples/` (installed to `/usr/share/kraken-explorer/examples/` by the .deb); `tentacle_sim.py` plus `tentacle.dbc` simulate a kraken on a vcan for a first look; `j1939_source_addresses.py` keeps a live table of which source address sends each J1939 PGN. UDS: `kraken.uds_request(bytes([0x22, 0xF1, 0x90]), tx_id=0x7E0, rx_id=0x7E8)` returns the response bytes (raises `TimeoutError` without one; `fd=True`, `tx_ae` / `rx_ae` and `p2_star` are available), `kraken.uds_scan()` the ECUs answering a functional TesterPresent (`physical=True` sweeps ids instead), `kraken.uds_service_scan(tx_id, rx_id)` and `kraken.uds_did_scan(first, last, tx_id, rx_id)` probe one ECU; `examples/uds_ecu_sim.py` is a SocketCAN ECU simulator to try them against.
 *   **Transmit**: Generator view with a bit matrix and a per-signal value editor (physical values from the DBC). Each row is sent **Cyclic** (interval), **Manual** (Send button only) or **On receive** (when a given id arrives on a given interface, after an optional delay). A newly added row becomes the current row, so Message View shows it at once. On a J1939 bus the generator learns each PGN's source address from received 29-bit frames (last sender wins; own TX echoes and error frames teach nothing, live traffic only — replay does not), and a row added from the DBC takes the learned address instead of the DBC's placeholder.
 *   **Trace statistics**: The aggregated trace shows Cycle min / max / mean / median per id; the replay Depth Gauge shows the file's frame-gap min / max / mean / median.
-*   **UDS Diagnostics** (Window > New > UDS Diagnostics): ISO 14229 requests over ISO-TP on classic CAN or CAN FD, 11-bit or 29-bit (normal fixed, `0x18DA<TA><SA>`), optionally with extended / mixed addressing (a leading address byte). The window grows across three tabs, with the ECU picker and the copyable log shared by all of them:
-    *   **Services**, grouped under *Session & reset*, *Read / write data*, *Diagnostic trouble codes*, *Routine & control*, *Security access* and *Raw request*: **Session** (default / programming / extended), **Tester present** (`3E 80` every 2 s) and a one-off Tester Present, **ECU Reset** (hard / keyOffOn / soft), **DID** read / write, **Read DTCs** (count / by status / supported / snapshot / extended, shown as `P0123-00 status 0x2F testFailed|confirmed`) and **Clear DTCs**; a **DTC text** file loaded with **Load** (plain text, one `<hex code> <description>` per line such as `F00016 Engine oil pressure too low`, `#` comments, optional `0x` prefix) adds the description to every code read, `F00016 status 0x2F  Engine oil pressure too low`. **Routine** start / stop / results, **I/O** control (returnControl / shortTermAdjust), **Memory** read / write (`23` / `3D`), **Security** access (request seed, then paste the key — no key algorithm is built in, compute it yourself or in a Python script; the last seed is logged) and a **Raw** request.
+*   **UDS Diagnostics** (Window > New > UDS Diagnostics, docked as a tab next to Value Search; **Window > Reset Window Layout** puts every window of the current tab back where it started, **Window > Dock Floating Windows** docks a Replay or other window that floats as its own OS window back into the tab bar next to Value Search): ISO 14229 requests over ISO-TP on classic CAN or CAN FD, 11-bit or 29-bit (normal fixed, `0x18DA<TA><SA>`), optionally with extended / mixed addressing (a leading address byte). The window's tabs share the ECU picker and the copyable log shared by all of them:
+    *   The service tabs **DTC**, **Session**, **DID**, **Routine / I/O / Memory**, **Security** and **Raw** (the raw request's bytes are decoded under the field as you type; a **DID text** file, `<hex DID> <name>` per line, names a product's DIDs next to the field and in the log): **Session** (default / programming / extended), **Tester present** (`3E 80` every 2 s) and a one-off Tester Present, **ECU Reset** (hard / keyOffOn / soft), **DID** read / write, **Read DTCs** (count / by status / supported / snapshot / extended, shown as `P0123-00 status 0x2F testFailed|confirmed`) and **Clear DTCs**; a **DTC text** file loaded with **Load** (plain text, one `<hex code> <description>` per line such as `F00016 Engine oil pressure too low`, `#` comments, optional `0x` prefix) adds the description to every code read, `F00016 status 0x2F  Engine oil pressure too low`. **Routine** start / stop / results, **I/O** control (returnControl / shortTermAdjust), **Memory** read / write (`23` / `3D`), **Security** access (request seed, then paste the key — no key algorithm is built in, compute it yourself or in a Python script; the last seed is logged) and a **Raw** request.
     *   **Scan**: **Functional** TesterPresent to `0x7DF` and `0x18DB33F1`; **Sweep 11-bit** over an id range and **Sweep 29-bit** over node addresses (every one, or just the source addresses seen in the 29-bit traffic — handy on a J1939 bus), with a **Stop** button; **Scan DIDs** reads a DID range on the selected ECU. Results land in a table where each ECU can be named (names persist), probed for its supported services, and selected as the target; **Read DTCs (all nodes)** sends `19 02 FF` to every node in the table and logs each node's codes, described from the loaded DTC text file. An 11-bit ECU found by a sweep gets the OBD convention request id = response id - 8, marked `?`, until its real request is seen.
     *   **Transport**: CAN FD and BRS, the largest frame length, the padding byte, the tx / rx address-extension bytes and the P2 / P2* / N_Bs / N_Cr timing.
     Long requests are segmented with the ECU's flow control (block size, STmin), long responses get a flow control and are reassembled, NRC 0x78 "response pending" extends the wait. The ECU list also fills itself from the traffic: every request / response pair seen on the bus is learned (11-bit: the answer's id paired with the request it followed; 29-bit: both addresses of the answer). Also from Python (`kraken.uds_request`, `kraken.uds_scan`, `kraken.uds_service_scan`, `kraken.uds_did_scan`) and the REST API. The trace's **UDS Protocol** view decodes extended addressing when it is turned on in Settings. Try it against `examples/uds_ecu_sim.py`, which names each ECU after its node address (ECU10 answers on `0x18DAF110`) and only answers requests, never a response byte, so two simulated ECUs cannot echo at each other. Not covered: the flash download / upload flow (`34` / `36` / `37`, reachable as Raw requests) and SecurityAccess key algorithms (manual seed / key).
@@ -101,6 +102,13 @@ nlohmann/json, nanosvg and doctest are downloaded at configure time (FetchConten
 `cmake/deps.cmake`); everything else comes from the system.
 
 ### 🐧 Linux
+
+Quickest: `git clone https://github.com/stoffej/kraken-explorer && cd kraken-explorer && scripts/install.sh`
+installs the build dependencies, builds a `.deb` and installs it. By hand: `cmake -S . -B build -G Ninja
+&& cmake --build build --target kraken-explorer`, run `build/src/kraken-explorer`; `scripts/build_deb.sh
+&& sudo dpkg -i build/deb/kraken-explorer_*.deb` packages it. A binary run without the `.deb` needs the
+polkit rule below for SocketCAN link control.
+
 
 #### Install dependencies (Ubuntu / Debian)
 
@@ -236,10 +244,12 @@ use an ssh tunnel from other hosts). Every request runs on the main thread, repl
 | `POST /measurement/start`, `POST /measurement/stop` | like F5 / Shift+F5; a refused start (no interface enabled, or none opened) answers 409 with `{"error": ...}` |
 | `POST /record {"armed": true}` | arm / disarm recording (Ctrl+R) |
 | `POST /trace/clear` | clear the trace |
-| `POST /trace/save {"path": "out.asc"}` | save the trace (.asc, .blf, .candump, .log, .mf4, .pcap, .pcapng, .trc) |
+| `POST /trace/save {"path": "out.asc"}` | save the trace (.asc, .blf, .candump, .log, .mf4, .pcap, .pcapng, .trc; .csv adds the DBC columns: sender, name, decoded signals, comment) |
 | `POST /send {"iface": "vcan0", "id": 291, "data": "01 02 03", "extended": false, "fd": false}` | send one frame |
 | `POST /script {"code": "import kraken\nprint(kraken.trace_size())"}` | run Python in the script window (409 while one runs) |
 | `POST /uds {"iface": "vcan0", "tx": "0x7E0", "rx": "0x7E8", "data": "22 F1 90", "extended": false, "timeout": 1.0}` | UDS request; `{"response": "62 F1 90 ...", "text": "DID F190 = ..."}`, a negative response is a response too (`7F 22 31`); no answer: 504. Also takes `fd`, `brs`, `tx_ae`, `rx_ae`, `padding`, `p2_star` |
+| `POST /uds/session {"session": "extended"}`, `/uds/tester_present`, `/uds/reset {"kind": "hard"}`, `/uds/security {"level": 1, "key": "AB CD"}` (no key: request seed), `/uds/dtc {"status_mask": "FF"}` (hex; adds `"dtcs": [{"code": "F00016", "status": "0x2F"}]`), `/uds/dtc/clear {"group": "FFFFFF"}` | the same as `/uds` with the request bytes built for you; all take the `/uds` target fields (`iface`, `tx`, `rx`, `extended`, ...) and answer `{"request", "response", "text"}` |
+| `POST /uds/dtc_file {"path": "dtc_pcu.txt", "product": "PCU", "codes": "F00016 Oil pressure low\nC12300 Lost HCU", "replace": false}`, `/uds/did_file` | write or extend a per-product DTC text / DID name file (the format **DTC text** / **DID text** > Load reads); the file's own lines and comments are kept and updated codes replaced in place unless `replace` |
 | `POST /uds/scan {"iface": "vcan0"}` | functional TesterPresent on 11 and 29 bit: `{"ecus": [{"tx": "0x7E0", "rx": "0x7E8", "extended": false, "guessed": true}, ...]}`. With `"physical": true` it sweeps ids instead (`first`, `last`, `extended`, `tester`) |
 | `POST /uds/services {"iface": "vcan0", "tx": "0x7E0", "rx": "0x7E8"}` | which services the ECU supports: `{"services": [{"sid": "0x22", "name": "ReadDataByIdentifier"}, ...]}` |
 | `POST /uds/dids {"iface": "vcan0", "tx": "0x7E0", "rx": "0x7E8", "first": "0xF180", "last": "0xF1FF"}` | ReadDataByIdentifier over a range: `{"dids": [{"did": "0xF190", "name": "VIN", "data": "57 4B ..."}, ...]}` |
@@ -249,6 +259,29 @@ curl -s localhost:8321/status
 curl -s -X POST localhost:8321/measurement/start
 curl -s -X POST localhost:8321/send -d '{"iface":"vcan0","id":291,"data":"DE AD"}'
 ```
+
+## MCP server
+
+`scripts/kraken_mcp.py` is a [Model Context Protocol](https://modelcontextprotocol.io) server that
+lets an AI assistant (Claude Code, Claude Desktop, Cursor, ...) drive a running Kraken Explorer
+through the REST API above: start the app with `--api 8321`, then register the server (stdio
+transport; `uv` fetches the `mcp` package on first run, `KRAKEN_API` overrides the URL):
+
+```bash
+claude mcp add kraken -- uv run /path/to/kraken-explorer/scripts/kraken_mcp.py
+```
+
+```json
+{"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/path/to/scripts/kraken_mcp.py"]}}}
+```
+
+Tools: `status`, `measurement`, `send_frame` (raw CAN), `uds_request` (any raw UDS request, decoded
+answer), `uds_session`, `uds_tester_present`, `uds_ecu_reset`, `uds_security_access` (request seed /
+send key per level), `uds_scan`, `uds_services`, `uds_dids`, `read_dtcs` (the codes as the 6 hex digit
+form the DTC text files use, with their status byte), `clear_dtcs` and `write_dtc_file`, which
+writes or extends a `<code> <text>` file for one product that the UDS window's **DTC text** > Load
+reads. A typical session: "scan vcan0 for ECUs, read the DTCs of the engine ECU and write
+`dtc_engine.txt` with a description of each code".
 
 ## Reference adapter firmware
 
