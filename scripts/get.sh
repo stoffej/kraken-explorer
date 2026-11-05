@@ -1,6 +1,7 @@
 #!/bin/sh
 # Install the latest Kraken Explorer release on Linux as a self-updating AppImage:
-#   curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh
+#   TAG=$(curl -fsSL https://api.github.com/repos/stoffej/kraken-explorer/releases/latest | sed -n 's/^[[:space:]]*"tag_name": "\([^"]*\)",/\1/p')
+#   curl -fsSL "https://raw.githubusercontent.com/stoffej/kraken-explorer/$TAG/scripts/get.sh" | sh
 # Puts the AppImage in ~/.local/bin (kraken-explorer.AppImage, with a `kraken-explorer` link), a
 # menu entry and icon under ~/.local/share, and on Ubuntu / Debian the SocketCAN polkit rule plus
 # the netdev group (sudo asks for your password there), so link control from the app (up / down,

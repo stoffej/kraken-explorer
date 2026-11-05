@@ -275,8 +275,8 @@ canconvert TCU.arxml TCU.dbc
 ## 📥 Download
 
 Download the latest release from the [Releases](https://github.com/stoffej/kraken-explorer/releases):
-the Linux AppImage (`curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh`
-installs it in `~/.local/bin` with a menu entry and the SocketCAN polkit rule), the `.deb`, the Windows
+the Linux AppImage (the [installer command](../README.md#install) fetches the installer from the latest
+release and installs it in `~/.local/bin` with a menu entry and the SocketCAN polkit rule), the `.deb`, the Windows
 installer or the portable zip, the macOS DMG. The AppImage and the Windows installer update themselves from the app
 (see **Updates** above).
 

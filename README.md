@@ -22,7 +22,8 @@ Ubuntu / Debian the SocketCAN polkit rule and the `netdev` group (sudo asks once
 in if prompted):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stoffej/kraken-explorer/main/scripts/get.sh | sh
+TAG=$(curl -fsSL https://api.github.com/repos/stoffej/kraken-explorer/releases/latest | sed -n 's/^[[:space:]]*"tag_name": "\([^"]*\)",/\1/p')
+curl -fsSL "https://raw.githubusercontent.com/stoffej/kraken-explorer/$TAG/scripts/get.sh" | sh
 ```
 
 Or download the AppImage yourself (`chmod +x`, run it); it updates itself in place wherever it is.
