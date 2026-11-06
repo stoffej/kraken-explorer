@@ -355,7 +355,8 @@ std::string trace_filter(const App& app, TraceWindowState& s, std::string_view b
     if (body.find("\"hidden_ids\"") != std::string_view::npos)
     {
         ids.clear();
-        for (const auto part : std::views::split(std::string_view(json_get(body, "hidden_ids")), ','))
+        const std::string hidden_ids = json_get(body, "hidden_ids");
+        for (const auto part : std::views::split(std::string_view(hidden_ids), ','))
         {
             const std::string_view t = trim(std::string_view(part.begin(), part.end()));
             const auto id = hex_id(t);
@@ -372,7 +373,8 @@ std::string trace_filter(const App& app, TraceWindowState& s, std::string_view b
     if (body.find("\"hidden_ifaces\"") != std::string_view::npos)
     {
         ifaces.clear();
-        for (const auto part : std::views::split(std::string_view(json_get(body, "hidden_ifaces")), ','))
+        const std::string hidden_ifaces = json_get(body, "hidden_ifaces");
+        for (const auto part : std::views::split(std::string_view(hidden_ifaces), ','))
         {
             const std::string_view t = trim(std::string_view(part.begin(), part.end()));
             const Iface* i = iface_by_name(app, t);

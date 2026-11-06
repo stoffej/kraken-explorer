@@ -128,7 +128,7 @@ TEST_CASE("macros, script, settings")
 
     f.req("POST", "/script/file", R"({"path":"/nonexistent.py"})");
     CHECK(f.status == 400);
-    std::ofstream(f.dir / "s.py") << "print(1)\n";
+    std::ofstream(f.dir / "s.py", std::ios::binary) << "print(1)\n";
     f.req("POST", "/script/file", std::format(R"({{"path":"{}","run":false}})", (f.dir / "s.py").generic_string()));
     CHECK(f.status == 200);
     CHECK(f.app.script.code == "print(1)\n");
