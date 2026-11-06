@@ -5,6 +5,8 @@
 # ///
 # MCP server for Kraken Explorer: lets an AI assistant (Claude Code, Claude Desktop, ...) drive a
 # running instance through its REST API (start it with `kraken-explorer --api 8321`): status,
+# every menu command, interfaces (create a vcan, enable for measurement), databases and signals,
+# graphs (time / XY), value search, windows, Python scripts, the tentacle simulator,
 # measurement / recording / trace save, raw CAN frames, raw UDS requests, sessions / tester present
 # / reset, ECU scan, DTC read / clear and writing the "<hex code> <text>" DTC and DID files the UDS
 # window loads, one per product.
@@ -14,8 +16,12 @@
 # Claude Code:  claude mcp add kraken -- uv run /usr/share/kraken-explorer/kraken_mcp.py   # .deb install
 # Claude Desktop (claude_desktop_config.json):
 #   {"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/usr/share/kraken-explorer/kraken_mcp.py"]}}}
+import atexit
 import json
 import os
+import subprocess
+import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -55,6 +61,141 @@ def uds(route: str, iface: str, tx: str, rx: str, extended: bool, **fields) -> d
 def status() -> dict:
     """Measuring / recording state, frames in the trace and the interfaces (name, driver, open, up)."""
     return call("GET", "/status")
+
+
+@mcp.tool()
+def list_commands() -> dict:
+    """Every menu command run_command takes (File / Measurement / Trace / Window menus: "Replay",
+    "Watch", "Instrument Panel", "UDS Diagnostics", "DBC Editor", "Tab", "Reset Window Layout", ...),
+    whether it is enabled now and whether it only opens a dialog (dialog=true: the user has to finish
+    it; prefer the tools that take arguments, e.g. trace_save over "Save Trace to File...")."""
+    return call("GET", "/commands")
+
+
+@mcp.tool()
+def run_command(name: str) -> dict:
+    """Run a menu command by its name from list_commands, as clicking the menu item does
+    (e.g. "Replay" opens a Replay view, "Graph View" a new empty graph, "Clear" clears the trace).
+    A disabled command (Start while measuring, ...) answers 409."""
+    return call("POST", "/command", {"name": name})
+
+
+@mcp.tool()
+def list_windows() -> dict:
+    """Titles of the windows of the current workspace tab ("Trace", "Log", "CAN Status", "Graph",
+    "Graph 2", "Value Search", "Python Script", ...); focus_window brings one to the front."""
+    return call("GET", "/windows")
+
+
+@mcp.tool()
+def focus_window(window: str) -> dict:
+    """Bring a window of the current tab to the front (a docked one becomes the visible tab)."""
+    return call("POST", "/focus", {"window": window})
+
+
+@mcp.tool()
+def create_vcan(name: str = "") -> dict:
+    """Create a virtual CAN interface (Linux SocketCAN) and bring it up, as Setup's "New vcan" does;
+    name "" takes the next free vcanN, an existing one is just brought up. Runs `ip` through pkexec:
+    without the polkit rule (packaging/10-kraken-explorer-socketcan.rules) the desktop asks for a
+    password. Not while measuring. Then enable_interface to measure on it."""
+    return call("POST", "/vcan", {"name": name})
+
+
+@mcp.tool()
+def enable_interface(iface: str, enabled: bool = True) -> dict:
+    """Enable (or disable) an interface for the next measurement, as ticking it in Setup does; one in
+    no network yet (e.g. a vcan created after the start) gets its own network. Not while measuring."""
+    return call("POST", "/interface", {"name": iface, "enabled": enabled})
+
+
+@mcp.tool()
+def load_database(path: str, iface: str) -> dict:
+    """Load a CAN database (.dbc, .dbf, .sym) onto the network of an enabled interface, so its frames
+    decode into signals (trace, graphs, value search); loading the same file again reloads it.
+    The tentacle simulator's database is the `dbc` path that simulator(start=True) returns."""
+    return call("POST", "/database", {"path": os.path.abspath(path), "iface": iface})
+
+
+@mcp.tool()
+def list_signals(filter: str = "") -> dict:
+    """Networks (interfaces, databases) and the signals of their databases as "Message.Signal" with
+    unit, the names open_graph and value_search take. `filter`: case-insensitive substring."""
+    out = call("GET", "/setup")
+    if "signals" in out and filter:
+        out["signals"] = [s for s in out["signals"] if filter.lower() in s["name"].lower()]
+    return out
+
+
+@mcp.tool()
+def open_graph(signals: list[str], view: str = "time") -> dict:
+    """Open a new graph window with these signals ("Message.Signal", or a bare signal name when only
+    one message has it). view "time": value over time; "xy": the first signal is X, the others Y.
+    An unknown name answers with the closest matches."""
+    return call("POST", "/graph", {"signals": ", ".join(signals), "view": view})
+
+
+@mcp.tool()
+def value_search(signal: str, value_from: float | None = None, value_to: float | None = None) -> dict:
+    """Show the Value Search window and find the samples of `signal` in [value_from, value_to] in the
+    trace (None = open bound). Returns the hit count and status; the window lists the hits (a click
+    puts Log and Graph on one). An unknown name is left in the window's fuzzy search box."""
+    body = {"signal": signal}
+    if value_from is not None:
+        body["from"] = value_from
+    if value_to is not None:
+        body["to"] = value_to
+    return call("POST", "/value_search", body)
+
+
+@mcp.tool()
+def run_script(code: str) -> dict:
+    """Run Python inside the app (the Python Script window, `import kraken`; see examples/*.py).
+    One script at a time (409 while one runs); output goes to that window."""
+    return call("POST", "/script", {"code": code})
+
+
+_sim: subprocess.Popen | None = None
+
+
+def examples_dir() -> str | None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (os.environ.get("KRAKEN_EXAMPLES"), os.path.join(here, "examples"), os.path.join(here, "..", "examples")):
+        if d and os.path.isfile(os.path.join(d, "tentacle_sim.py")):
+            return os.path.normpath(d)
+    return None
+
+
+@atexit.register
+def _stop_sim() -> None:
+    if _sim is not None and _sim.poll() is None:
+        _sim.terminate()
+        _sim.wait(5)
+
+
+@mcp.tool()
+def simulator(start: bool, iface: str = "vcan0") -> dict:
+    """Start / stop the tentacle simulator (examples/tentacle_sim.py, a separate process, not inside
+    the app): 8 tentacles (Tentacle1..8: Angle, Curl, Grip, ...) every 50 ms and KrakenStatus (Depth,
+    HeartRate, InkLevel, Mood) every 200 ms on a SocketCAN interface (create_vcan first). Returns the
+    path of the matching `dbc` (examples/tentacle.dbc) for load_database. KRAKEN_EXAMPLES overrides
+    where the examples are looked for."""
+    global _sim
+    _stop_sim()
+    _sim = None
+    if not start:
+        return {"running": False}
+    d = examples_dir()
+    if d is None:
+        return {"error": "tentacle_sim.py not found: set KRAKEN_EXAMPLES to the examples folder"}
+    _sim = subprocess.Popen([sys.executable, os.path.join(d, "tentacle_sim.py"), iface],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    time.sleep(0.5)  # a missing interface fails at once
+    if _sim.poll() is not None:
+        err = _sim.stderr.read().decode(errors="replace").strip().splitlines()
+        _sim = None
+        return {"error": err[-1] if err else "simulator exited"}
+    return {"running": True, "pid": _sim.pid, "iface": iface, "dbc": os.path.join(d, "tentacle.dbc")}
 
 
 @mcp.tool()

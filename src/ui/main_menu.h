@@ -90,6 +90,8 @@ inline constexpr int chord_capture_cancelled = -2;
 
 // Triggers cmd as its menu item does; nothing when the command is disabled now (a macro step).
 void menu_run(App& app, Command cmd);
+// False while cmd is disabled (Start while measuring, Stop while not, Setup while measuring).
+[[nodiscard]] bool menu_enabled(const App& app, Command cmd);
 // Returns true once if cmd was triggered this frame.
 [[nodiscard]] bool menu_take(MainMenu& menu, Command cmd) noexcept;
 

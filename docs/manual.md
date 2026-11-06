@@ -240,7 +240,15 @@ use an ssh tunnel from other hosts). Every request runs on the main thread, repl
 
 | Route | Effect |
 |---|---|
-| `GET /status` | measuring, recording, record_armed, trace_frames, interfaces (index, driver, name, open, up) |
+| `GET /status` | measuring, recording, record_armed, trace_frames, interfaces (index, driver, name, open, up, enabled) |
+| `GET /commands`, `POST /command {"name": "Replay"}` | the menu commands (`{"name", "dialog", "enabled"}`; `dialog`: it only opens a dialog) and running one as its menu item does; a disabled one answers 409. Not Exit |
+| `GET /windows`, `POST /focus {"window": "Value Search"}` | titles of the current tab's windows; bring one to the front |
+| `POST /vcan {"name": "vcan0"}` | create a vcan (no name: the next free vcanN) or bring an existing one up, then reload the interfaces; `ip` runs through pkexec on the API's thread (403 when authorization is refused). Linux, not while measuring |
+| `POST /interface {"name": "vcan0", "enabled": true}` | enable / disable an interface for the next measurement; one in no network gets its own. Not while measuring |
+| `POST /database {"path": "/abs/tentacle.dbc", "iface": "vcan0"}` | load a CAN database (.dbc, .dbf, .sym) onto the network of the interface (reloads it when already there) |
+| `GET /setup` | networks (interfaces, databases) and every signal (`{"name": "Message.Signal", "unit", "network"}`) |
+| `POST /graph {"signals": "Tentacle1.Angle, Tentacle1.Curl", "view": "time"}` | a new graph window in the current tab; `"view": "xy"`: the first signal is X. Names are `Message.Signal` or a signal name only one message has; an unknown one answers 400 with the closest matches |
+| `POST /value_search {"signal": "KrakenStatus.Depth", "from": 1000, "to": 1500}` | Value Search on that signal and range (missing bound: open), brought to the front: `{"hits", "truncated", "scanning", "status"}`; an unknown name is left in its search box |
 | `POST /measurement/start`, `POST /measurement/stop` | like F5 / Shift+F5; a refused start (no interface enabled, or none opened) answers 409 with `{"error": ...}` |
 | `POST /record {"armed": true}` | arm / disarm recording (Ctrl+R) |
 | `POST /trace/clear` | clear the trace |
@@ -278,13 +286,17 @@ claude mcp add kraken -- uv run "$env:LOCALAPPDATA\Programs\Kraken Explorer\krak
 {"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/usr/share/kraken-explorer/kraken_mcp.py"]}}}
 ```
 
-Tools: `status`, `measurement`, `record`, `trace_clear`, `trace_save`, `send_frame` (raw CAN), `uds_request` (any raw UDS request, decoded
+Tools: `status`, `list_commands` / `run_command` (any menu command), `list_windows` / `focus_window`,
+`create_vcan`, `enable_interface`, `load_database`, `list_signals`, `open_graph` (time or XY),
+`value_search`, `run_script` (Python in the app), `simulator` (starts / stops
+`examples/tentacle_sim.py` as its own process and returns the path of `tentacle.dbc`), `measurement`, `record`, `trace_clear`, `trace_save`, `send_frame` (raw CAN), `uds_request` (any raw UDS request, decoded
 answer), `uds_session`, `uds_tester_present`, `uds_ecu_reset`, `uds_security_access` (request seed /
 send key per level), `uds_scan`, `uds_services`, `uds_dids`, `read_dtcs` (the codes as the 6 hex digit
 form the DTC text files use, with their status byte), `clear_dtcs`, `write_dtc_file`, which
 writes or extends a `<code> <text>` file for one product that the UDS window's **DTC text** > Load
 reads, and `write_did_file`, the same for DID names. A typical session: "scan vcan0 for ECUs, read the DTCs of the engine ECU and write
-`dtc_engine.txt` with a description of each code".
+`dtc_engine.txt` with a description of each code". Or: "create vcan0, run the tentacle simulator on it with its DBC, start measuring and
+plot Tentacle1 Angle against Curl".
 
 ## Reference adapter firmware
 

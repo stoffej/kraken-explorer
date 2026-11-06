@@ -220,6 +220,8 @@ void poll(App& app, CanStatusState& s)
     }
 }
 
+} // namespace
+
 // Status text for a failed `ip` call; "short: detail" is drawn short with detail as tooltip.
 std::string ip_error_text(IpResult r, const std::string& name)
 {
@@ -236,6 +238,9 @@ std::string ip_error_text(IpResult r, const std::string& name)
     }
     return std::format("ip failed on {}, see Log", name);
 }
+
+namespace
+{
 
 // Draws text up to its first ": " (the whole text as tooltip) or all of it.
 void draw_status_text(const std::string& text, const ImVec4* color = nullptr)
@@ -376,6 +381,8 @@ void toggle_link(App& app, const Iface& iface)
                  iface.info.details == "vcan" ? nullptr : &timing);
 }
 
+} // namespace
+
 // The interface's entry in the setup (driver + name), nullptr when it is in no network.
 SetupInterface* setup_of(Setup& setup, const Iface& iface)
 {
@@ -392,6 +399,9 @@ SetupInterface* setup_of(Setup& setup, const Iface& iface)
     }
     return nullptr;
 }
+
+namespace
+{
 
 // The Active / Passive button: flips the setup's listen-only for the interface. The next
 // measurement opens it that way; a SocketCAN link that is up is taken down and up again in the

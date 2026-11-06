@@ -51,6 +51,10 @@ void workspace_close_tab(App& app, unsigned uid);
 // Current tab or nullptr when there is none.
 [[nodiscard]] WorkspaceTab* workspace_current(WorkspaceTabs& ws);
 
+// The tabbed node extra windows dock into (Value Search's: Log, Python Script, ...), the tab's
+// dockspace when that floats. Dock Floating Windows and a new Replay use it.
+[[nodiscard]] unsigned workspace_dock_target(const WorkspaceTab& tab);
+
 // Draws the bottom tab bar and the current tab's dockspace; keeps the other tabs' dockspaces
 // alive. Call after draw_main_menu and before the tab's windows. Returns the current tab.
 WorkspaceTab* draw_workspace(App& app);

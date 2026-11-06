@@ -11,6 +11,8 @@
 #include "ui/vim_nav.h"
 
 struct App;
+struct Setup;
+struct SetupInterface;
 struct WorkspaceTab;
 
 // Last values of one interface; kept after the measurement stops, like the old tree rows.
@@ -72,5 +74,10 @@ void draw_link_buttons(App& app, const Iface& iface);
 
 // "New vcan" button: creates the next free vcanN.
 void draw_new_vcan_button(App& app);
+
+// Status text for a failed `ip` call ("" for ok); the link buttons and REST /vcan show it.
+[[nodiscard]] std::string ip_error_text(IpResult r, const std::string& name);
+// The interface's entry in the setup (driver + name), nullptr when it is in no network.
+[[nodiscard]] SetupInterface* setup_of(Setup& setup, const Iface& iface);
 
 void draw_can_status(App& app, CanStatusState& s, const WorkspaceTab& tab);

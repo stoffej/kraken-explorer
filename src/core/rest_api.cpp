@@ -25,6 +25,7 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -39,6 +40,10 @@
 #include "core/text.h"
 #include "decoders/decoders.h"
 #include "ui/diag_dialog.h"
+#include "ui/graph.h"
+#include "ui/value_search.h"
+#include <imgui.h>
+#include <imgui_internal.h>
 
 namespace
 {
@@ -64,14 +69,15 @@ std::string json_string(std::string_view s)
     return out + '"';
 }
 
-std::string status_json(const App& app)
+std::string status_json(App& app)
 {
     std::string ifaces;
     for (const Iface& i : app.ifaces)
     {
-        ifaces += std::format("{}{{\"index\":{},\"driver\":{},\"name\":{},\"open\":{},\"up\":{}}}", ifaces.empty() ? "" : ",",
-                              i.index, json_string(i.ops ? i.ops->name : ""), json_string(i.info.name),
-                              i.open && !i.failed.load(), i.info.up);
+        const SetupInterface* si = setup_of(app.setup, i);
+        ifaces += std::format("{}{{\"index\":{},\"driver\":{},\"name\":{},\"open\":{},\"up\":{},\"enabled\":{}}}",
+                              ifaces.empty() ? "" : ",", i.index, json_string(i.ops ? i.ops->name : ""),
+                              json_string(i.info.name), i.open && !i.failed.load(), i.info.up, si != nullptr && si->enabled);
     }
     return std::format("{{\"measuring\":{},\"recording\":{},\"record_armed\":{},\"trace_frames\":{},\"interfaces\":[{}]}}",
                        app.measuring, app.recorder.recording.load(), app.recorder.armed, trace_size(app.trace), ifaces);
@@ -114,6 +120,337 @@ std::string send_json(App& app, std::string_view body)
     }
     set_length(m, static_cast<uint8_t>(len));
     return iface_send(*iface, m) ? "" : "interface not open";
+}
+
+// {"name":"vcan0"} (empty: the next free vcanN): creates the vcan (or brings an existing one up)
+// and re-enumerates the interfaces. Runs on the server thread: `ip` goes through pkexec, which
+// can wait for a password prompt unless the polkit rule (packaging/) is installed.
+std::string vcan_json(App& app, std::string_view body, int& status)
+{
+    status = 400;
+    if (!socketcan_available)
+    {
+        return "{\"error\":\"vcan needs SocketCAN (Linux)\"}";
+    }
+    std::string name = json_get(body, "name");
+    if (name.empty())
+    {
+        name = next_vcan_name([](const std::string& n) { return socketcan_link_exists(n); });
+    }
+    // What the polkit rule allows (IFNAMSIZ - 1), and nothing ip could take as an option.
+    if (name.size() > 15 || name.starts_with('-')
+        || name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") != std::string::npos)
+    {
+        return "{\"error\":\"name: up to 15 of A-Z a-z 0-9 _ . -\"}";
+    }
+    bool measuring = false;
+    tasks_run_on_main_blocking(app.tasks, app, [&](App& a) { measuring = a.measuring; });
+    if (measuring)
+    {
+        status = 409; // the interface list is not re-enumerated under open interfaces
+        return "{\"error\":\"stop the measurement first\"}";
+    }
+    IpResult r = IpResult::ok;
+    if (!socketcan_link_exists(name))
+    {
+        r = socketcan_run_ip(ip_link_args(LinkOp::AddVcan, name));
+    }
+    else if (!socketcan_link_up(name))
+    {
+        r = socketcan_run_ip(ip_link_args(LinkOp::Up, name));
+    }
+    if (r != IpResult::ok)
+    {
+        status = r == IpResult::failed ? 500 : 403;
+        return std::format("{{\"error\":{}}}", json_string(ip_error_text(r, name)));
+    }
+    std::string out;
+    tasks_run_on_main_blocking(app.tasks, app, [&](App& a)
+    {
+        if (!a.measuring)
+        {
+            ifaces_enumerate(a.ifaces);
+        }
+        out = status_json(a);
+    });
+    status = 200;
+    return std::format("{{\"vcan\":{},{}", json_string(name), out.substr(1));
+}
+
+// {"name":"vcan0","enabled":true}: the interface takes part in the next measurement. One not in
+// the setup yet (a vcan created after the start) gets its own network, as Setup's Refresh does.
+std::string interface_json(App& app, std::string_view body, int& status)
+{
+    status = 400;
+    if (app.measuring)
+    {
+        status = 409;
+        return "{\"error\":\"stop the measurement first\"}";
+    }
+    const std::string name = json_get(body, "name");
+    const auto it = std::ranges::find(app.ifaces, name, [](const Iface& i) { return i.info.name; });
+    if (it == app.ifaces.end() || it->ops == nullptr)
+    {
+        return std::format("{{\"error\":{}}}", json_string(std::format("no such interface \"{}\" (see /status)", name)));
+    }
+    const bool enable = json_get(body, "enabled") != "false";
+    if (SetupInterface* si = setup_of(app.setup, *it))
+    {
+        si->enabled = enable;
+    }
+    else if (enable)
+    {
+        std::string net;
+        for (int i = 1; net.empty() || setup_find_network(app.setup, net); ++i)
+        {
+            net = std::format("Network {}", i);
+        }
+        app.setup.networks.push_back(
+            {.name = net, .interfaces = {{.driver = it->ops->name, .name = it->info.name, .bus_type = it->info.bus_type}}});
+    }
+    setup_rebuild_cache(app.setup);
+    status = 200;
+    return status_json(app);
+}
+
+// {"path":"/abs/x.dbc","iface":"vcan0"}: a CAN database (DBC / DBF / SYM) on the network of
+// the interface, as Setup's "Add Database..." does; a file already there is reloaded.
+std::string database_json(App& app, std::string_view body, int& status)
+{
+    status = 400;
+    const std::string file = json_get(body, "path");
+    const std::string name = json_get(body, "iface");
+    if (file.empty())
+    {
+        return "{\"error\":\"path missing\"}";
+    }
+    const auto net = std::ranges::find_if(app.setup.networks, [&](const SetupNetwork& n)
+    {
+        return std::ranges::contains(n.interfaces, name, &SetupInterface::name);
+    });
+    if (net == app.setup.networks.end())
+    {
+        return std::format("{{\"error\":{}}}", json_string(std::format("\"{}\" is in no network: enable it first (/interface)", name)));
+    }
+    if (!setup_add_can_db(*net, file))
+    {
+        return std::format("{{\"error\":{}}}", json_string("cannot load " + file));
+    }
+    setup_rebuild_cache(app.setup);
+    const auto db = std::ranges::find(net->can_dbs, file, [](const auto& d) { return d->path; });
+    status = 200;
+    return std::format("{{\"path\":{},\"network\":{},\"messages\":{}}}", json_string(file), json_string(net->name),
+                       (*db)->messages.size());
+}
+
+// "Message.Signal", or "Signal" when only one message has it, among the setup's databases.
+std::optional<SignalEntry> find_signal(SignalSearch& s, const Setup& setup, std::string_view name)
+{
+    signal_search_update(s, setup, std::string(name)); // also ranks s.hits for unknown_signal
+    std::optional<SignalEntry> found;
+    for (const SignalEntry& e : s.entries)
+    {
+        if (e.label == name)
+        {
+            return e;
+        }
+        if (e.label.size() > name.size() && e.label.ends_with(name) && e.label[e.label.size() - name.size() - 1] == '.')
+        {
+            if (found)
+            {
+                return std::nullopt; // ambiguous: the error lists the candidates
+            }
+            found = e;
+        }
+    }
+    return found;
+}
+
+std::string unknown_signal(const SignalSearch& s, std::string_view name)
+{
+    std::string close;
+    for (std::size_t i = 0; i < std::min<std::size_t>(s.hits.size(), 10); ++i)
+    {
+        close += (close.empty() ? "" : ", ") + s.entries[static_cast<std::size_t>(s.hits[i].entry)].label;
+    }
+    return std::format("{{\"error\":{}}}", json_string(std::format("unknown signal \"{}\" (load a DBC first?){}{}", name,
+                                                                   close.empty() ? "" : "; closest: ", close)));
+}
+
+// {"signals":"Msg.A, Msg.B","view":"time"|"xy"}: a new graph window in the current tab, as the
+// trace window's "Add to New Graph". XY: the first signal is X, the others Y.
+std::string graph_json(App& app, std::string_view body, int& status)
+{
+    status = 400;
+    WorkspaceTab* tab = workspace_current(app.workspace);
+    const std::string view = json_get(body, "view");
+    const bool xy = view == "xy";
+    if (!view.empty() && view != "time" && !xy)
+    {
+        return "{\"error\":\"view: time or xy\"}";
+    }
+    SignalSearch search;
+    std::vector<SignalEntry> picked;
+    const std::string list = json_get(body, "signals");
+    for (std::string_view rest = list; !rest.empty();)
+    {
+        const std::size_t comma = rest.find(',');
+        const std::string_view name = trim(rest.substr(0, comma));
+        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+        if (name.empty())
+        {
+            continue;
+        }
+        const auto e = find_signal(search, app.setup, name);
+        if (!e)
+        {
+            return unknown_signal(search, name);
+        }
+        picked.push_back(*e);
+    }
+    if (picked.size() < (xy ? 2u : 1u))
+    {
+        return xy ? "{\"error\":\"xy needs two signals or more: X first, then Y\"}"
+                  : "{\"error\":\"signals missing (\\\"Message.Signal, ...\\\")\"}";
+    }
+    if (tab == nullptr)
+    {
+        status = 409;
+        return "{\"error\":\"no workspace tab\"}";
+    }
+    // The docked "Graph" while it is still empty, else a new graph docked beside it.
+    const auto main = std::ranges::find(tab->graphs, 0u, &GraphState::id);
+    GraphState& g = main != tab->graphs.end() && main->signals.empty() ? *main : graph_new(*tab);
+    if (g.id != 0)
+    {
+        // A tab beside the docked "Graph", as its "+" button makes, not a floating window.
+        const ImGuiWindow* docked = ImGui::FindWindowByName(workspace_window_name(*tab, "Graph").c_str());
+        g.dock_into = docked != nullptr && docked->DockNode != nullptr ? docked->DockNode->ID : 0;
+    }
+    ImGui::SetWindowFocus(workspace_window_name(*tab, g.id == 0 ? "Graph" : std::format("Graph {}", g.id).c_str()).c_str());
+    g.view = xy ? GraphView::XY : GraphView::TimeSeries;
+    std::string labels;
+    for (const SignalEntry& e : picked)
+    {
+        graph_add_signal(g, app.setup, e);
+        labels += (labels.empty() ? "" : ",") + json_string(e.label);
+    }
+    status = 200;
+    return std::format("{{\"graph\":{},\"view\":{},\"signals\":[{}]}}", json_string(g.id == 0 ? "Graph" : std::format("Graph {}", g.id)),
+                       json_string(xy ? "xy" : "time"), labels);
+}
+
+// {"signal":"Msg.Sig","from":10,"to":20}: the tab's Value Search, brought to the front, on that
+// signal and range (missing bound = open). An unknown signal is left in its fuzzy search box.
+std::string value_search_json(App& app, std::string_view body, int& status)
+{
+    status = 400;
+    WorkspaceTab* tab = workspace_current(app.workspace);
+    const std::string name = json_get(body, "signal");
+    if (tab == nullptr)
+    {
+        status = 409;
+        return "{\"error\":\"no workspace tab\"}";
+    }
+    if (name.empty())
+    {
+        return "{\"error\":\"signal missing\"}";
+    }
+    double bounds[2] = {-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+    const std::string text[2] = {json_get(body, "from"), json_get(body, "to")};
+    for (int i = 0; i < 2; ++i)
+    {
+        const char* end = text[i].data() + text[i].size();
+        if (!text[i].empty() && float_from_chars(text[i].data(), end, bounds[i]).ptr != end)
+        {
+            return std::format("{{\"error\":{}}}", json_string(std::format("{}: a number", i == 0 ? "from" : "to")));
+        }
+    }
+    ValueSearch& v = app.value_searches[tab->uid];
+    ImGui::SetWindowFocus(workspace_window_name(*tab, "Value Search").c_str());
+    v.raw = false;
+    SignalSearch search;
+    const auto e = find_signal(search, app.setup, name);
+    if (!e)
+    {
+        v.query = name;
+        return unknown_signal(search, name);
+    }
+    v.query.clear();
+    v.signal = *e;
+    v.setup_generation = app.setup.generation; // else its first draw drops the pick as stale
+    v.from = text[0];
+    v.to = text[1];
+    v.hits.clear();
+    v.status.clear();
+    value_search_start(app, v, bounds[0], bounds[1], false);
+    status = 200;
+    return std::format("{{\"signal\":{},\"hits\":{},\"truncated\":{},\"scanning\":{},\"status\":{}}}", json_string(e->label),
+                       v.hits.size(), v.truncated, v.job.valid(), json_string(v.status));
+}
+
+// A menu command by its label for /command(s). Not Exit (the API would end its own app) and
+// not Open Recording Folder (its menu item has no handler yet).
+Command rest_command(std::string_view label)
+{
+    const Command cmd = command_by_label(label);
+    return cmd == Command::Exit || cmd == Command::RecordingOpenFolder ? Command::Count : cmd;
+}
+
+// GET /setup: networks (interfaces, databases) and every signal of their databases, the names
+// /graph and /value_search take.
+std::string setup_json(App& app)
+{
+    std::string nets;
+    for (const SetupNetwork& n : app.setup.networks)
+    {
+        std::string ifs;
+        for (const SetupInterface& si : n.interfaces)
+        {
+            ifs += std::format("{}{{\"name\":{},\"driver\":{},\"enabled\":{}}}", ifs.empty() ? "" : ",", json_string(si.name),
+                               json_string(si.driver), si.enabled);
+        }
+        std::string dbs;
+        for (const auto& db : n.can_dbs)
+        {
+            dbs += (dbs.empty() ? "" : ",") + json_string(db->path);
+        }
+        for (const auto& db : n.lin_dbs)
+        {
+            dbs += (dbs.empty() ? "" : ",") + json_string(db->path);
+        }
+        nets += std::format("{}{{\"name\":{},\"interfaces\":[{}],\"databases\":[{}]}}", nets.empty() ? "" : ",",
+                            json_string(n.name), ifs, dbs);
+    }
+    SignalSearch search;
+    signal_search_update(search, app.setup, "");
+    std::string sigs;
+    for (const SignalEntry& e : search.entries)
+    {
+        const std::string& unit = e.can_sig != nullptr ? e.can_sig->unit : e.lin_sig != nullptr ? e.lin_sig->unit : std::string{};
+        sigs += std::format("{}{{\"name\":{},\"unit\":{},\"network\":{}}}", sigs.empty() ? "" : ",", json_string(e.label),
+                            json_string(unit), json_string(app.setup.networks[e.network].name));
+    }
+    return std::format("{{\"networks\":[{}],\"signals\":[{}]}}", nets, sigs);
+}
+
+// GET /windows: titles of the current tab's windows that were drawn last frame ("Trace", "Log",
+// "Graph 2", ...), the names /focus takes. Docked ones count also behind another tab.
+std::string windows_json(App& app)
+{
+    const WorkspaceTab* tab = workspace_current(app.workspace);
+    std::string out;
+    for (const ImGuiWindow* w : ImGui::GetCurrentContext() != nullptr ? GImGui->Windows : ImVector<ImGuiWindow*>{})
+    {
+        const std::string_view name = w->Name;
+        const std::size_t sep = name.find("###");
+        if (tab != nullptr && sep != std::string_view::npos && name.ends_with(std::format("@{}", tab->uid))
+            && (w->DockIsActive || (w->WasActive && (w->Flags & ImGuiWindowFlags_ChildWindow) == 0)))
+        {
+            out += (out.empty() ? "" : ",") + json_string(name.substr(0, sep));
+        }
+    }
+    return std::format("{{\"windows\":[{}]}}", out);
 }
 
 // "0x7E0", "7E0h" is not accepted; a JSON number is decimal.
@@ -483,6 +820,10 @@ void serve(std::stop_token stop, RestApi& api, App& app)
                 {
                     body = uds_json(app, path, content, status);
                 }
+                else if (method == "POST" && path == "/vcan")
+                {
+                    body = vcan_json(app, content, status);
+                }
                 else
                 {
                     tasks_run_on_main_blocking(app.tasks, app, [&](App& a) { body = rest_api_handle(a, method, path, content, status); });
@@ -595,6 +936,76 @@ std::string rest_api_handle(App& app, std::string_view method, std::string_view 
         const std::string error = send_json(app, body);
         status = error.empty() ? 200 : 400;
         return error.empty() ? "{\"sent\":true}" : std::format("{{\"error\":{}}}", json_string(error));
+    }
+    if (method == "GET" && path == "/setup")
+    {
+        return setup_json(app);
+    }
+    if (method == "GET" && path == "/windows")
+    {
+        return windows_json(app);
+    }
+    if (post && path == "/focus")
+    {
+        const WorkspaceTab* tab = workspace_current(app.workspace);
+        const std::string title = json_get(body, "window");
+        const std::string name = tab != nullptr ? workspace_window_name(*tab, title.c_str()) : "";
+        if (title.empty() || ImGui::GetCurrentContext() == nullptr || ImGui::FindWindowByName(name.c_str()) == nullptr)
+        {
+            status = 400;
+            return "{\"error\":\"no such window (see /windows)\"}";
+        }
+        ImGui::SetWindowFocus(name.c_str());
+        return std::format("{{\"focused\":{}}}", json_string(title));
+    }
+    if (method == "GET" && path == "/commands")
+    {
+        std::string out;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(Command::Count); ++i)
+        {
+            const Command cmd = static_cast<Command>(i);
+            const std::string_view label = command_label(cmd);
+            if (rest_command(label) == cmd) // not "Graph View##widget": the same window as Graph View
+            {
+                out += std::format("{}{{\"name\":{},\"dialog\":{},\"enabled\":{}}}", out.empty() ? "" : ",",
+                                   json_string(label), label.ends_with("..."), menu_enabled(app, cmd));
+            }
+        }
+        return std::format("{{\"commands\":[{}]}}", out);
+    }
+    if (post && path == "/command")
+    {
+        const std::string label = json_get(body, "name");
+        const Command cmd = rest_command(label);
+        if (cmd == Command::Count)
+        {
+            status = 400;
+            return "{\"error\":\"no such command (see /commands)\"}";
+        }
+        if (!menu_enabled(app, cmd))
+        {
+            status = 409;
+            return std::format("{{\"error\":{}}}", json_string(label + " is disabled now (measurement running / not running)"));
+        }
+        // The menu item's action, pending until the frame's handler takes it (the same frame).
+        menu_run(app, cmd);
+        return std::format("{{\"command\":{},\"dialog\":{}}}", json_string(label), label.ends_with("..."));
+    }
+    if (post && path == "/interface")
+    {
+        return interface_json(app, body, status);
+    }
+    if (post && path == "/database")
+    {
+        return database_json(app, body, status);
+    }
+    if (post && path == "/graph")
+    {
+        return graph_json(app, body, status);
+    }
+    if (post && path == "/value_search")
+    {
+        return value_search_json(app, body, status);
     }
     if (post && path == "/script")
     {

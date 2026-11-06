@@ -1931,6 +1931,7 @@ void draw_replay(App& app, WorkspaceTab& tab, Replay& r)
     }
     const float px = ImGui::GetFontSize() / 15.0f; // the size is in 1x pixels: scale with the font (HiDPI)
     ImGui::SetNextWindowSize(ImVec2(640.0f * px, 480.0f * px), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowDockID(workspace_dock_target(tab), ImGuiCond_FirstUseEver); // a tab with Log, not floating
     if (ImGui::Begin(workspace_window_name(tab, "Replay").c_str(), &r.open))
     {
         const bool running = r.running;

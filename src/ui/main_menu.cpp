@@ -580,6 +580,11 @@ void menu_run(App& app, Command cmd)
     }
 }
 
+bool menu_enabled(const App& app, Command cmd)
+{
+    return enabled(app, cmd);
+}
+
 const char* command_shortcut(const MainMenu& menu, Command cmd)
 {
     const int chord = command_chord(menu, cmd);
