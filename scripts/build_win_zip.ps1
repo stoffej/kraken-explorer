@@ -30,6 +30,7 @@ New-Item $Stage -ItemType Directory | Out-Null
 Copy-Item "$Build\src\$Name.exe" $Stage
 strip --strip-unneeded "$Stage\$Name.exe"
 Copy-Item "$Src\examples" "$Stage\examples" -Recurse
+Copy-Item "$Src\scripts\kraken_mcp.py" $Stage
 Copy-Item "$Src\LICENSE", "$Src\packaging\windows\install.bat", "$Src\packaging\windows\uninstall.bat" $Stage
 
 # The embeddable package of the Python the exe was linked against: python3xx.dll, the standard

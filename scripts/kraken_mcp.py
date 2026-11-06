@@ -5,14 +5,15 @@
 # ///
 # MCP server for Kraken Explorer: lets an AI assistant (Claude Code, Claude Desktop, ...) drive a
 # running instance through its REST API (start it with `kraken-explorer --api 8321`): status,
-# raw CAN frames, raw UDS requests, sessions / tester present / reset, ECU scan, DTC read / clear
-# and writing the "<hex code> <text>" DTC files the UDS window loads, one per product.
+# measurement / recording / trace save, raw CAN frames, raw UDS requests, sessions / tester present
+# / reset, ECU scan, DTC read / clear and writing the "<hex code> <text>" DTC and DID files the UDS
+# window loads, one per product.
 #
 #   uv run scripts/kraken_mcp.py            # stdio transport; KRAKEN_API overrides the URL
 #
-# Claude Code:  claude mcp add kraken -- uv run /path/to/scripts/kraken_mcp.py
+# Claude Code:  claude mcp add kraken -- uv run /usr/share/kraken-explorer/kraken_mcp.py   # .deb install
 # Claude Desktop (claude_desktop_config.json):
-#   {"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/path/to/scripts/kraken_mcp.py"]}}}
+#   {"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/usr/share/kraken-explorer/kraken_mcp.py"]}}}
 import json
 import os
 import urllib.error

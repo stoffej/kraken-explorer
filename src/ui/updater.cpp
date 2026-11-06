@@ -36,6 +36,7 @@ namespace
 {
 
 constexpr const char* api_url = "https://api.github.com/repos/stoffej/kraken-explorer/releases/latest";
+constexpr const char* raw_url = "https://raw.githubusercontent.com/stoffej/kraken-explorer";
 constexpr const char* releases_url = "https://github.com/stoffej/kraken-explorer/releases/latest";
 constexpr auto check_interval = std::chrono::hours(24);
 constexpr auto retry_interval = std::chrono::hours(1); // after a failed check (offline)
@@ -141,6 +142,33 @@ void check(std::shared_ptr<UpdateShared> s, InstallKind kind, std::filesystem::p
     }
 }
 
+// scripts/get.sh puts the MCP server (scripts/kraken_mcp.py) next to the AppImage's menu entry;
+// an AppImage update brings the one of the new release. Only when get.sh installed it, and best
+// effort: if the download fails the old script stays.
+void update_mcp_script(const std::string& tag)
+{
+    const char* home = std::getenv("HOME");
+    std::error_code ec;
+    if (home == nullptr || *home == '\0' || tag.empty())
+    {
+        return;
+    }
+    const std::filesystem::path script = std::filesystem::path(home) / ".local/share/kraken-explorer/kraken_mcp.py";
+    if (!std::filesystem::exists(script, ec))
+    {
+        return;
+    }
+    std::filesystem::path part = script;
+    part += ".part";
+    const std::vector<std::string> args = {"curl", "-fsSL", "--max-time", "60", "-H", "User-Agent: kraken-explorer/" VERSION_STRING,
+                                           "-o", utf8(part), std::format("{}/{}/scripts/kraken_mcp.py", raw_url, tag)};
+    if (platform_run(args) == 0)
+    {
+        std::filesystem::rename(part, script, ec);
+    }
+    std::filesystem::remove(part, ec);
+}
+
 void download(std::shared_ptr<UpdateShared> s, InstallKind kind, std::filesystem::path self, Wake wake)
 {
     UpdateAsset asset;
@@ -221,6 +249,10 @@ void download(std::shared_ptr<UpdateShared> s, InstallKind kind, std::filesystem
         {
             std::filesystem::remove(self, ec);
         }
+        if (error.empty())
+        {
+            update_mcp_script(release.tag);
+        }
     }
     {
         const std::scoped_lock lock(s->mutex);
@@ -250,6 +282,7 @@ UpdateRelease updater_parse_release(std::string_view json)
     {
         return r;
     }
+    r.tag = tag;
     if (tag.front() == 'v' || tag.front() == 'V')
     {
         tag.erase(0, 1);

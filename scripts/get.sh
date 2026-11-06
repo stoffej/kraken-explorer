@@ -3,10 +3,11 @@
 #   TAG=$(curl -fsSL https://api.github.com/repos/stoffej/kraken-explorer/releases/latest | sed -n 's/^[[:space:]]*"tag_name": "\([^"]*\)",/\1/p')
 #   curl -fsSL "https://raw.githubusercontent.com/stoffej/kraken-explorer/$TAG/scripts/get.sh" | sh
 # Puts the AppImage in ~/.local/bin (kraken-explorer.AppImage, with a `kraken-explorer` link), a
-# menu entry and icon under ~/.local/share, and on Ubuntu / Debian the SocketCAN polkit rule plus
-# the netdev group (sudo asks for your password there), so link control from the app (up / down,
-# new vcan) needs no password. The app then updates itself: the menu bar shows "Update x.y.z"
-# when a new release is out, and replaces the file in place.
+# menu entry, icon and the MCP server (kraken-explorer/kraken_mcp.py) under ~/.local/share, and
+# on Ubuntu / Debian the SocketCAN polkit rule plus the netdev group (sudo asks for your password
+# there), so link control from the app (up / down, new vcan) needs no password.
+# The app then updates itself: the menu bar shows "Update x.y.z" when a new release is out, and
+# replaces the file in place.
 # Run it as yourself, not with sudo: the files go to your home.
 set -eu
 
@@ -29,7 +30,7 @@ if command -v apt-get >/dev/null && ! ldconfig -p 2>/dev/null | grep -q 'libfuse
     sudo apt-get install -y libfuse2t64 2>/dev/null || sudo apt-get install -y libfuse2
 fi
 
-mkdir -p "$BIN" "$SHARE/applications" "$SHARE/icons/hicolor/256x256/apps"
+mkdir -p "$BIN" "$SHARE/applications" "$SHARE/icons/hicolor/256x256/apps" "$SHARE/kraken-explorer"
 echo "==> Downloading $URL"
 curl -fL --progress-bar -o "$APP.part" "$URL"
 chmod 755 "$APP.part"
@@ -38,6 +39,7 @@ ln -sfn "$APP" "$BIN/kraken-explorer"
 
 RAW="https://raw.githubusercontent.com/$REPO/$TAG"
 curl -fsSL -o "$SHARE/icons/hicolor/256x256/apps/kraken-explorer.png" "$RAW/packaging/kraken-explorer.png"
+curl -fsSL -o "$SHARE/kraken-explorer/kraken_mcp.py" "$RAW/scripts/kraken_mcp.py" # MCP server, see the README
 curl -fsSL "$RAW/kraken-explorer.desktop" | sed "s|^Exec=.*|Exec=$APP %f|" > "$SHARE/applications/kraken-explorer.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$SHARE/applications" 2>/dev/null || true
 

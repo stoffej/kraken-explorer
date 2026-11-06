@@ -32,6 +32,7 @@ TEST_CASE("release JSON: tag, page, assets with their sizes")
 {
     const UpdateRelease r = updater_parse_release(release_json);
     CHECK(r.version == "0.0.7");
+    CHECK(r.tag == "0.0.7");
     CHECK(r.page == "https://github.com/stoffej/kraken-explorer/releases/tag/0.0.7");
     REQUIRE(r.assets.size() == 3);
     CHECK(r.assets[2].name == "Kraken_Explorer-0.0.7-x86_64.AppImage");
@@ -47,6 +48,7 @@ TEST_CASE("release JSON: tag, page, assets with their sizes")
 TEST_CASE("a 'v' prefix is skipped, garbage and rate-limit answers give no version")
 {
     CHECK(updater_parse_release(R"({"tag_name": "v1.2.3", "assets": []})").version == "1.2.3");
+    CHECK(updater_parse_release(R"({"tag_name": "v1.2.3", "assets": []})").tag == "v1.2.3");
     CHECK(updater_parse_release(R"({"message": "API rate limit exceeded", "tag_name": "latest"})").version.empty());
     CHECK(updater_parse_release("").version.empty());
     CHECK(updater_parse_release("not json").version.empty());

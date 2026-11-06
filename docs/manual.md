@@ -268,19 +268,22 @@ through the REST API above: start the app with `--api 8321`, then register the s
 transport; `uv` fetches the `mcp` package on first run, `KRAKEN_API` overrides the URL):
 
 ```bash
-claude mcp add kraken -- uv run /path/to/kraken-explorer/scripts/kraken_mcp.py
+claude mcp add kraken -- uv run ~/.local/share/kraken-explorer/kraken_mcp.py                        # Linux (AppImage)
+claude mcp add kraken -- uv run /usr/share/kraken-explorer/kraken_mcp.py                            # Linux (.deb)
+claude mcp add kraken -- uv run "/Applications/Kraken Explorer.app/Contents/Resources/kraken_mcp.py"  # macOS
+claude mcp add kraken -- uv run "$env:LOCALAPPDATA\Programs\Kraken Explorer\kraken_mcp.py"         # Windows (PowerShell; unzipped: next to the exe)
 ```
 
 ```json
-{"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/path/to/scripts/kraken_mcp.py"]}}}
+{"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/usr/share/kraken-explorer/kraken_mcp.py"]}}}
 ```
 
-Tools: `status`, `measurement`, `send_frame` (raw CAN), `uds_request` (any raw UDS request, decoded
+Tools: `status`, `measurement`, `record`, `trace_clear`, `trace_save`, `send_frame` (raw CAN), `uds_request` (any raw UDS request, decoded
 answer), `uds_session`, `uds_tester_present`, `uds_ecu_reset`, `uds_security_access` (request seed /
 send key per level), `uds_scan`, `uds_services`, `uds_dids`, `read_dtcs` (the codes as the 6 hex digit
-form the DTC text files use, with their status byte), `clear_dtcs` and `write_dtc_file`, which
+form the DTC text files use, with their status byte), `clear_dtcs`, `write_dtc_file`, which
 writes or extends a `<code> <text>` file for one product that the UDS window's **DTC text** > Load
-reads. A typical session: "scan vcan0 for ECUs, read the DTCs of the engine ECU and write
+reads, and `write_did_file`, the same for DID names. A typical session: "scan vcan0 for ECUs, read the DTCs of the engine ECU and write
 `dtc_engine.txt` with a description of each code".
 
 ## Reference adapter firmware

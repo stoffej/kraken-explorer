@@ -35,6 +35,7 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@MIN_MACOS@/$MIN_MACOS/g" \
     -e "s/@BUNDLE_ID@/${BUNDLE_ID:-io.github.stoffej.kraken-explorer}/g" \
     packaging/macos/Info.plist.in > "$CONTENTS/Info.plist"
 find examples -maxdepth 1 -type f -exec cp {} "$CONTENTS/Resources/examples/" \; # not __pycache__
+cp scripts/kraken_mcp.py "$CONTENTS/Resources/"
 
 # App icon from the 256 px PNG (the largest there is).
 ICONSET="$BUILD/kraken-explorer.iconset"

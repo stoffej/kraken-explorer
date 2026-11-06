@@ -63,11 +63,14 @@ Every UDS route answers with the request, the response bytes and a decoded text
 (needs [uv](https://docs.astral.sh/uv/); the app must run with `--api 8321`):
 
 ```bash
-claude mcp add kraken -- uv run /path/to/kraken-explorer/scripts/kraken_mcp.py      # Claude Code
+claude mcp add kraken -- uv run ~/.local/share/kraken-explorer/kraken_mcp.py                        # Linux (AppImage)
+claude mcp add kraken -- uv run /usr/share/kraken-explorer/kraken_mcp.py                            # Linux (.deb)
+claude mcp add kraken -- uv run "/Applications/Kraken Explorer.app/Contents/Resources/kraken_mcp.py"  # macOS
+claude mcp add kraken -- uv run "$env:LOCALAPPDATA\Programs\Kraken Explorer\kraken_mcp.py"         # Windows (PowerShell; unzipped: next to the exe)
 ```
 
 ```json
-{"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/path/to/kraken-explorer/scripts/kraken_mcp.py"]}}}
+{"mcpServers": {"kraken": {"command": "uv", "args": ["run", "/usr/share/kraken-explorer/kraken_mcp.py"]}}}
 ```
 
 (Claude Desktop: `claude_desktop_config.json`; Cursor and others take the same JSON.) The tools:

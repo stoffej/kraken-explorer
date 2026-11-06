@@ -66,6 +66,7 @@ struct UpdateAsset
 struct UpdateRelease
 {
     std::string version; // the tag, e.g. "0.0.7"
+    std::string tag;     // as published, "v" and all (raw.githubusercontent.com wants it)
     std::string page;    // html_url of the release
     std::vector<UpdateAsset> assets;
 };
