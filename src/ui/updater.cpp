@@ -142,8 +142,9 @@ void check(std::shared_ptr<UpdateShared> s, InstallKind kind, std::filesystem::p
     }
 }
 
-// scripts/get.sh puts the MCP server (scripts/kraken_mcp.py) next to the AppImage's menu entry;
-// an AppImage update brings the one of the new release. Only when get.sh installed it, and best
+// scripts/get.sh puts the MCP server (scripts/kraken_mcp.py) and the simulator it can start
+// (examples/tentacle_sim.py + tentacle.dbc) in ~/.local/share/kraken-explorer; an AppImage update
+// brings the ones of the new release. Only when get.sh installed it, and best
 // effort: if the download fails the old script stays.
 void update_mcp_script(const std::string& tag)
 {
@@ -153,20 +154,27 @@ void update_mcp_script(const std::string& tag)
     {
         return;
     }
-    const std::filesystem::path script = std::filesystem::path(home) / ".local/share/kraken-explorer/kraken_mcp.py";
-    if (!std::filesystem::exists(script, ec))
+    const std::filesystem::path dir = std::filesystem::path(home) / ".local/share/kraken-explorer";
+    if (!std::filesystem::exists(dir / "kraken_mcp.py", ec))
     {
         return;
     }
-    std::filesystem::path part = script;
-    part += ".part";
-    const std::vector<std::string> args = {"curl", "-fsSL", "--max-time", "60", "-H", "User-Agent: kraken-explorer/" VERSION_STRING,
-                                           "-o", utf8(part), std::format("{}/{}/scripts/kraken_mcp.py", raw_url, tag)};
-    if (platform_run(args) == 0)
+    std::filesystem::create_directories(dir / "examples", ec);
+    // The same files get.sh fetches: the server and what its simulator tool runs.
+    for (const char* file : {"scripts/kraken_mcp.py", "examples/tentacle_sim.py", "examples/tentacle.dbc"})
     {
-        std::filesystem::rename(part, script, ec);
+        const std::string_view name(file);
+        const std::filesystem::path target = dir / (name.starts_with("scripts/") ? name.substr(8) : name);
+        std::filesystem::path part = target;
+        part += ".part";
+        const std::vector<std::string> args = {"curl", "-fsSL", "--max-time", "60", "-H", "User-Agent: kraken-explorer/" VERSION_STRING,
+                                               "-o", utf8(part), std::format("{}/{}/{}", raw_url, tag, file)};
+        if (platform_run(args) == 0)
+        {
+            std::filesystem::rename(part, target, ec);
+        }
+        std::filesystem::remove(part, ec);
     }
-    std::filesystem::remove(part, ec);
 }
 
 void download(std::shared_ptr<UpdateShared> s, InstallKind kind, std::filesystem::path self, Wake wake)
