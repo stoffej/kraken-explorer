@@ -72,6 +72,10 @@ void can_status_sort(CanStatusState& s, const std::deque<Iface>& ifaces);
 // Up/Down (and Delete for vcan) for a SocketCAN interface; nothing for other drivers.
 void draw_link_buttons(App& app, const Iface& iface);
 
+// Takes a SocketCAN link down / up (with the setup's bit timing) on the link worker, then reloads
+// the interfaces; ignored while s.link_busy. The Up/Down button and REST /interface/<name>/link.
+void toggle_link(App& app, const Iface& iface);
+
 // "New vcan" button: creates the next free vcanN.
 void draw_new_vcan_button(App& app);
 

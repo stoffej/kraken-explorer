@@ -75,10 +75,15 @@ claude mcp add kraken -- uv run "$env:LOCALAPPDATA\Programs\Kraken Explorer\krak
 
 (Claude Desktop: `claude_desktop_config.json`; Cursor and others take the same JSON.) The tools:
 `status`, `list_commands` / `run_command` (any menu command), `list_windows` / `focus_window`,
-`create_vcan`, `enable_interface`, `load_database`, `list_signals`, `open_graph` (time / XY),
+`create_vcan`, `enable_interface`, `load_database`, `get_interface` / `configure_interface`, `load_ldf`,
+`reload_databases`, `set_link`, `can_status`, `list_signals`, `open_graph` (time / XY),
 `value_search`, `run_script`, `simulator` (examples/tentacle_sim.py), `measurement`, `record`,
 `trace_clear`, `trace_save`, `send_frame`, `uds_request` (any raw request), `uds_session`, `uds_tester_present`, `uds_ecu_reset`, `uds_security_access`, `uds_scan`,
-`uds_services`, `uds_dids`, `read_dtcs`, `clear_dtcs`, `write_dtc_file`, `write_did_file`. Then just
+`uds_services`, `uds_dids`, `read_dtcs`, `clear_dtcs`, `write_dtc_file`, `write_did_file`,
+`replay_load` / `replay_status` / `replay_control` / `replay_config` / `replay_channel`, `trace_frames`,
+`trace_filter`, `trace_view`, `trace_goto`, `raw_search`, `value_search_hits`, `generator_list` /
+`generator_add` / `generator_enable` / `generator_remove` / `generator_set_signal`, `macros`, `script_file` /
+`script_stop` / `script_output`, `workspace`, `tabs`, `graph_export`, `convert`, `watch`, `settings`. Then just
 ask: *"scan vcan0, switch the engine ECU to extended session, request a level 1 seed"* or *"create
 vcan0, run the tentacle simulator with its DBC and graph Tentacle1 Angle against Curl"*.
 

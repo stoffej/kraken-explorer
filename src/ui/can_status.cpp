@@ -372,6 +372,8 @@ void autobaud_command(App& app, Iface& iface)
     }
 }
 
+} // namespace
+
 // The Up/Down button (and Enter/Space on the selected row): physical CAN needs bit timing to
 // come up; vcan has none.
 void toggle_link(App& app, const Iface& iface)
@@ -380,8 +382,6 @@ void toggle_link(App& app, const Iface& iface)
     link_command(app, iface.info.up ? LinkOp::Down : LinkOp::Up, iface.info.name,
                  iface.info.details == "vcan" ? nullptr : &timing);
 }
-
-} // namespace
 
 // The interface's entry in the setup (driver + name), nullptr when it is in no network.
 SetupInterface* setup_of(Setup& setup, const Iface& iface)

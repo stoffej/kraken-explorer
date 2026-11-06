@@ -118,6 +118,53 @@ def load_database(path: str, iface: str) -> dict:
 
 
 @mcp.tool()
+def get_interface(iface: str) -> dict:
+    """The full setup of one interface: bitrate / sample_point (per mille), can_fd, fd_bitrate /
+    fd_sample_point, listen_only, one_shot, auto_restart(_ms), custom bit timing, the lin_* settings,
+    its network, link state, and the bit timings the interface offers ("offered"; empty = any)."""
+    return call("GET", f"/interface/{iface}")
+
+
+@mcp.tool()
+def configure_interface(iface: str, settings: dict) -> dict:
+    """Change setup fields of an interface for the next measurement (not while measuring); only the
+    keys given change. CAN: bitrate, sample_point (per mille, 875 = 87.5 %), can_fd, fd_bitrate,
+    fd_sample_point, listen_only, one_shot, triple_sampling, auto_restart, auto_restart_ms, configure,
+    is_custom_bitrate / custom_bitrate, is_custom_fd_bitrate / custom_fd_bitrate. LIN: lin_baudrate,
+    lin_protocol ("1.3".."2.2A"), lin_node_mode ("master" / "slave" / "monitor"), lin_listen_only,
+    lin_checksum_classic, lin_schedule_table, lin_slave_node, lin_timebase_ms, lin_jitter_us.
+    A rate the interface does not offer answers 400 with the choices. Returns get_interface."""
+    return call("POST", f"/interface/{iface}", settings)
+
+
+@mcp.tool()
+def load_ldf(path: str, iface: str) -> dict:
+    """Load a LIN description file onto the network of a LIN interface; the interface (and other LIN
+    interfaces of the network without an LDF) take its baud rate, timebase, jitter and protocol."""
+    return call("POST", f"/interface/{iface}/ldf", {"path": os.path.abspath(path)})
+
+
+@mcp.tool()
+def reload_databases() -> dict:
+    """Re-read every DBC / LDF of the setup from disk (after editing one). Not while measuring."""
+    return call("POST", "/setup/reload")
+
+
+@mcp.tool()
+def set_link(iface: str, up: bool) -> dict:
+    """Take a SocketCAN link up (with the setup's bit timing) or down. Runs `ip` through pkexec in the
+    background: answers pending, check status() for "up". Not while measuring."""
+    return call("POST", f"/interface/{iface}/link", {"up": up})
+
+
+@mcp.tool()
+def can_status() -> dict:
+    """The CAN Status counters per interface since its last open: state ("ok" / "warning" / "error passive" /
+    "bus off"), rx/tx frames and errors, overruns, dropped, actual bitrate, bus load, error frames."""
+    return call("GET", "/can_status")
+
+
+@mcp.tool()
 def list_signals(filter: str = "") -> dict:
     """Networks (interfaces, databases) and the signals of their databases as "Message.Signal" with
     unit, the names open_graph and value_search take. `filter`: case-insensitive substring."""
@@ -324,6 +371,226 @@ def trace_save(path: str) -> dict:
     """Save the trace to a file; the extension picks the format (.asc, .blf, .candump, .log, .mf4,
     .pcap, .pcapng, .trc)."""
     return call("POST", "/trace/save", {"path": path})
+
+
+@mcp.tool()
+def replay_status() -> dict:
+    """The current tab's Replay view: file, load progress (loading, load_fraction, load_frames),
+    frames, duration, channels (name, mapped iface, enabled), running / paused / position, speed,
+    fast, loop, autoplay, from / to range, break_at."""
+    return call("GET", "/replay")
+
+
+@mcp.tool()
+def replay_load(path: str) -> dict:
+    """Open the Replay view (docked next to the Log) and load a trace file (.asc, .blf, .candump,
+    .log, .mf4, .pcap, .pcapng, .trc). Loads in the background: poll replay_status until loading
+    is false. Without a measurement the whole file also shows in the trace (trace_frames)."""
+    return call("POST", "/replay/load", {"path": os.path.abspath(path)})
+
+
+@mcp.tool()
+def replay_control(action: str) -> dict:
+    """Replay playback: "play", "pause", "resume", "step" (one frame then paused; starts paused
+    when stopped), "stop", "open" / "close" (the window). Frames go to the interfaces each channel
+    is mapped to (replay_channel), else into the trace only."""
+    return call("POST", f"/replay/{action}")
+
+
+@mcp.tool()
+def replay_config(speed: float | None = None, fast: bool | None = None, loop: bool | None = None,
+                  autoplay: bool | None = None, range_from: str | None = None, range_to: str | None = None,
+                  break_at: str | None = None) -> dict:
+    """Replay settings; None keeps one. speed 0.1..10, fast = no timing at all, autoplay = start /
+    stop with the measurement. range_from / range_to / break_at: times since the first frame
+    ("90", "1:30", "2d 1:02:03"; "" = start / end / none; break_at comma separated). Only autoplay
+    changes while playing (409)."""
+    body = {"speed": speed, "fast": fast, "loop": loop, "autoplay": autoplay, "from": range_from, "to": range_to,
+            "break_at": break_at}
+    return call("POST", "/replay/config", {k: v for k, v in body.items() if v is not None})
+
+
+@mcp.tool()
+def replay_channel(channel: str, iface: str | None = None, enabled: bool | None = None) -> dict:
+    """Map a file channel (its name from replay_status, or its number) to an interface ("vcan0"; ""
+    = trace only) and/or enable / disable all its ids. Not while playing."""
+    body = {"channel": channel}
+    if iface is not None:
+        body["iface"] = iface
+    if enabled is not None:
+        body["enabled"] = enabled
+    return call("POST", "/replay/channel", body)
+
+
+@mcp.tool()
+def trace_frames(last: int = 20, start: int | None = None, count: int = 100, decode: bool = True) -> dict:
+    """Frames from the trace (a loaded file or live traffic): the last `last`, or `count` from trace
+    index `start` (up to 1000 per call; begin / end give the valid index range). Each: index, ts_ns,
+    t (s since the first frame), iface, id, extended, fd, tx, error, len, data; with decode the DBC
+    message name and its signal values."""
+    q = f"from={start}&count={count}" if start is not None else f"last={last}"
+    return call("GET", f"/trace/frames?{q}&decode={'true' if decode else 'false'}")
+
+
+@mcp.tool()
+def trace_filter(text: str | None = None, rx: bool | None = None, tx: bool | None = None,
+                 hidden_ids: list[str] | None = None, hidden_ifaces: list[str] | None = None) -> dict:
+    """The Trace window's filter (None keeps a setting; all None just reads it): text (substring
+    of id, name, channel, sender), show rx / tx, hidden_ids (hex, ["0x123", "7E8"]; [] = none
+    hidden), hidden_ifaces (interface names)."""
+    body = {}
+    if text is not None:
+        body["text"] = text
+    if rx is not None:
+        body["rx"] = rx
+    if tx is not None:
+        body["tx"] = tx
+    if hidden_ids is not None:
+        body["hidden_ids"] = ", ".join(hidden_ids)
+    if hidden_ifaces is not None:
+        body["hidden_ifaces"] = ", ".join(hidden_ifaces)
+    return call("POST", "/trace/filter", body) if body else call("GET", "/trace/filter")
+
+
+@mcp.tool()
+def trace_view(tab: str | None = None, view: str | None = None) -> dict:
+    """Switch the Trace window's tab ("monitor", "uds", "j1939") and/or that tab's view
+    ("monitor" = one row per id, "log" = every frame)."""
+    body = {k: v for k, v in {"tab": tab, "view": view}.items() if v is not None}
+    return call("POST", "/trace/view", body)
+
+
+@mcp.tool()
+def trace_goto(index: int) -> dict:
+    """Show and select trace frame `index` (from trace_frames or value_search_hits) in the Trace window."""
+    return call("POST", "/trace/goto", {"index": index})
+
+
+@mcp.tool()
+def value_search_hits(start: int = 0, count: int = 100) -> dict:
+    """The current Value Search's state (signal or raw pattern, scanning progress, status, hit count)
+    and hits[start:start+count] (up to 10000): trace index, ts_ns, value. Poll while scanning."""
+    return call("GET", f"/value_search/hits?from={start}&count={count}")
+
+
+@mcp.tool()
+def raw_search(id: str = "", data: str = "") -> dict:
+    """Value Search for raw frames: id in hex ("123", "1ABCDEF0"; "" = any) and/or data bytes as hex
+    pairs with ?? for any byte ("01 ?? FF", matched from byte 0). Then value_search_hits."""
+    return call("POST", "/value_search/raw", {"id": id, "data": data})
+
+
+def _some(**kw) -> dict:
+    return {k: v for k, v in kw.items() if v is not None}
+
+
+@mcp.tool()
+def generator_list(tab: str | None = None) -> dict:
+    """The Generator View's periodic transmit rows of a tab (default: current): index, name, id,
+    iface, interval_ms, enabled, data (hex)."""
+    return call("GET", "/generator", _some(tab=tab))
+
+
+@mcp.tool()
+def generator_add(message: str | None = None, id: str | None = None, dlc: int | None = None, iface: str | None = None,
+                  interval_ms: int = 100, extended: bool | None = None, tab: str | None = None) -> dict:
+    """Add a Generator row: a DBC message by name ("Status") or a raw id ("0x123", dlc bytes) on an
+    interface ("vcan0"). Starts stopped; use generator_set_signal and generator_enable."""
+    return call("POST", "/generator/add", _some(message=message, id=id, dlc=dlc, iface=iface, interval_ms=interval_ms,
+                                                extended=extended, tab=tab))
+
+
+@mcp.tool()
+def generator_enable(index: int, enabled: bool = True, interval_ms: int | None = None, tab: str | None = None) -> dict:
+    """Start / stop cyclic sending of a Generator row (starting needs a running measurement)."""
+    return call("POST", "/generator/enable", _some(index=index, enabled=enabled, interval_ms=interval_ms, tab=tab))
+
+
+@mcp.tool()
+def generator_remove(index: int, tab: str | None = None) -> dict:
+    """Remove a Generator row by index (see generator_list)."""
+    return call("POST", "/generator/remove", _some(index=index, tab=tab))
+
+
+@mcp.tool()
+def generator_set_signal(signal: str, value: float, index: int | None = None, tab: str | None = None) -> dict:
+    """Set a signal's physical value ("Message.Signal") in a Generator row: `index`, else the first
+    row of that message. Takes effect at the next send."""
+    return call("POST", "/generator/signal", _some(signal=signal, value=value, index=index, tab=tab))
+
+
+@mcp.tool()
+def macros(action: str = "list", name: str = "") -> dict:
+    """Macros of the workspace: action "list" (name, steps, running), "run" or "stop" a macro by name."""
+    return call("GET", "/macros") if action == "list" else call("POST", f"/macros/{action}", {"name": name})
+
+
+@mcp.tool()
+def script_file(path: str, run: bool = True) -> dict:
+    """Load a Python file into the Script window and run it (409 while a script runs)."""
+    return call("POST", "/script/file", {"path": os.path.abspath(path), "run": run})
+
+
+@mcp.tool()
+def script_stop() -> dict:
+    """Stop the running Python script (KeyboardInterrupt at its next line)."""
+    return call("POST", "/script/stop")
+
+
+@mcp.tool()
+def script_output() -> dict:
+    """The Script window's console (stdout + stderr of the last run), whether a script is running."""
+    return call("GET", "/script/output")
+
+
+@mcp.tool()
+def workspace(action: str, path: str = "") -> dict:
+    """Workspace file (.kraken): action "open" (loads before the next frame; stops the measurement)
+    or "save" (no path: the current file)."""
+    return call("POST", f"/workspace/{action}", _some(path=os.path.abspath(path) if path else None))
+
+
+@mcp.tool()
+def tabs(action: str = "list", title: str | None = None, index: int | None = None, name: str | None = None) -> dict:
+    """Workspace tabs: "list", "new" (title), "switch" / "close" (by title or index), "rename"
+    (title or index -> name)."""
+    if action == "list":
+        return call("GET", "/tab")
+    return call("POST", f"/tab/{action}", _some(title=title, index=index, name=name))
+
+
+@mcp.tool()
+def graph_export(path: str, graph: str = "Graph", tab: str | None = None) -> dict:
+    """Export a graph window ("Graph", "Graph 2", ...) to .csv (signal, unit, time_s, value) or .png
+    (rendered after the next frame)."""
+    return call("POST", "/graph/export", _some(path=os.path.abspath(path), graph=graph, tab=tab))
+
+
+@mcp.tool()
+def convert(kind: str, src: str = "", dst: str = "") -> dict:
+    """Convert: kind "database" (.dbc/.sym/.dbf -> .dbc/.dbf, by dst's extension), "log" (trace file
+    -> the format of dst's extension; runs in the background), "status" (log progress / last result)
+    or "cancel"."""
+    if kind == "status":
+        return call("GET", "/convert/status")
+    body = {"in": os.path.abspath(src), "out": os.path.abspath(dst)} if src else {}
+    return call("POST", f"/convert/{kind}", body)
+
+
+@mcp.tool()
+def watch(signals: str = "", reset: bool = False, tab: str | None = None) -> dict:
+    """The Watch window: add signals ("Msg.A, Msg.B"; opens it), or reset; returns each signal's
+    last value, min, max and count."""
+    if signals:
+        return call("POST", "/watch/add", _some(signals=signals, tab=tab))
+    return call("POST", "/watch/reset", _some(tab=tab)) if reset else call("GET", "/watch", _some(tab=tab))
+
+
+@mcp.tool()
+def settings(theme: str | None = None, font_scale: int | None = None) -> dict:
+    """Theme ("system", "light", "dark") and font scale (100..175 %); no arguments just reads them."""
+    body = _some(theme=theme, font_scale=font_scale)
+    return call("POST", "/settings", body) if body else call("GET", "/settings")
 
 
 if __name__ == "__main__":

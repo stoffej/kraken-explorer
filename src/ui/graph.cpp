@@ -2450,3 +2450,8 @@ void graph_show_range(GraphState& g, const Setup& setup, const SignalEntry& e, i
     g.show_t0_ns = -1;
     centre_on(g, t0_ns, t1_ns);
 }
+
+void graph_export_csv(const GraphState& g, const std::string& path)
+{
+    export_csv(g, path);
+}

@@ -246,6 +246,12 @@ use an ssh tunnel from other hosts). Every request runs on the main thread, repl
 | `POST /vcan {"name": "vcan0"}` | create a vcan (no name: the next free vcanN) or bring an existing one up, then reload the interfaces; `ip` runs through pkexec on the API's thread (403 when authorization is refused). Linux, not while measuring |
 | `POST /interface {"name": "vcan0", "enabled": true}` | enable / disable an interface for the next measurement; one in no network gets its own. Not while measuring |
 | `POST /database {"path": "/abs/tentacle.dbc", "iface": "vcan0"}` | load a CAN database (.dbc, .dbf, .sym) onto the network of the interface (reloads it when already there) |
+| `GET /interface/vcan0` | the interface's full setup (`bitrate`, `sample_point` in per mille, `can_fd`, `fd_bitrate`, `fd_sample_point`, `listen_only`, `one_shot`, `triple_sampling`, `auto_restart`, `auto_restart_ms`, custom bit timing, `lin_*`), its network, link state and the bit timings it offers (`offered`; empty: any) |
+| `POST /interface/vcan0 {"bitrate": 250000, "sample_point": 875, "can_fd": true, "fd_bitrate": 2000000, "listen_only": false}` | change those fields (only the keys given; LIN: `lin_baudrate`, `lin_protocol` "1.3".."2.2A", `lin_node_mode` master / slave / monitor, `lin_listen_only`, `lin_checksum_classic`, `lin_schedule_table`, `lin_slave_node`, `lin_timebase_ms`, `lin_jitter_us`); a rate the interface does not offer answers 400 with the choices. Interface must be in a network (`/interface`); not while measuring |
+| `POST /interface/lin0/ldf {"path": "/abs/x.ldf"}` | load an LDF onto the interface's network; the interface (and LIN interfaces there without an LDF) take its baud rate, timebase, jitter and protocol. Not while measuring |
+| `POST /interface/can0/link {"up": true}` | SocketCAN link up (with the setup's bit timing) / down on the link worker (pkexec may prompt): 202 `{"pending": true}`, poll `/status` for `up`; 409 while another link command runs or measuring |
+| `POST /setup/reload` | re-read every DBC / LDF of the setup from disk: `{"reloaded", "errors"}` (400 when one failed). Not while measuring |
+| `GET /can_status` | the CAN Status counters per interface: `state`, `rx_frames`, `rx_errors`, `tx_frames`, `tx_errors`, `rx_overruns`, `tx_dropped`, `bitrate`, `data_bitrate`, `load`, `error_frames`, `seen` (open in the last measurement) |
 | `GET /setup` | networks (interfaces, databases) and every signal (`{"name": "Message.Signal", "unit", "network"}`) |
 | `POST /graph {"signals": "Tentacle1.Angle, Tentacle1.Curl", "view": "time"}` | a new graph window in the current tab; `"view": "xy"`: the first signal is X. Names are `Message.Signal` or a signal name only one message has; an unknown one answers 400 with the closest matches |
 | `POST /value_search {"signal": "KrakenStatus.Depth", "from": 1000, "to": 1500}` | Value Search on that signal and range (missing bound: open), brought to the front: `{"hits", "truncated", "scanning", "status"}`; an unknown name is left in its search box |
@@ -261,6 +267,26 @@ use an ssh tunnel from other hosts). Every request runs on the main thread, repl
 | `POST /uds/scan {"iface": "vcan0"}` | functional TesterPresent on 11 and 29 bit: `{"ecus": [{"tx": "0x7E0", "rx": "0x7E8", "extended": false, "guessed": true}, ...]}`. With `"physical": true` it sweeps ids instead (`first`, `last`, `extended`, `tester`) |
 | `POST /uds/services {"iface": "vcan0", "tx": "0x7E0", "rx": "0x7E8"}` | which services the ECU supports: `{"services": [{"sid": "0x22", "name": "ReadDataByIdentifier"}, ...]}` |
 | `POST /uds/dids {"iface": "vcan0", "tx": "0x7E0", "rx": "0x7E8", "first": "0xF180", "last": "0xF1FF"}` | ReadDataByIdentifier over a range: `{"dids": [{"did": "0xF190", "name": "VIN", "data": "57 4B ..."}, ...]}` |
+| `GET /replay` | the current tab's Replay view: `open`, `path`, `info`, `loading`, `load_fraction`, `load_frames`, `frames`, `duration`, `channels` (`{"channel", "name", "iface", "enabled"}`), `running`, `paused`, `position`, `play_frames`, `speed`, `fast`, `loop`, `autoplay`, `from`, `to`, `break_at` |
+| `POST /replay/load {"path": "/abs/log.asc"}` | open the Replay view (docked next to the Log) and load a trace file in the background; poll `GET /replay` until `loading` is false |
+| `POST /replay/play`, `/replay/pause`, `/replay/resume`, `/replay/step`, `/replay/stop`, `/replay/open`, `/replay/close` | playback as the Replay buttons; `step` sends one frame and pauses (starts paused when stopped); 409 when not possible now |
+| `POST /replay/config {"speed": 2, "fast": false, "loop": true, "autoplay": false, "from": "1:30", "to": "", "break_at": "2:10, 2:20"}` | any of these; times since the first frame. Only `autoplay` while playing (409) |
+| `POST /replay/channel {"channel": "vcan0", "iface": "vcan1", "enabled": true}` | map a file channel (name or number) to an interface (`""`: trace only) and / or enable all its ids. Not while playing |
+| `GET /trace/frames?last=20`, `?from=INDEX&count=100`, `&decode=false` | trace frames (up to 1000): `{"begin", "end", "frames": [{"index", "ts_ns", "t", "iface", "id", "extended", "fd", "tx", "error", "len", "data", "name", "signals": {...}}]}`; `name` / `signals` when a database decodes it |
+| `GET /trace/filter`, `POST /trace/filter {"text": "Tentacle", "rx": true, "tx": false, "hidden_ids": "0x123, 7E8", "hidden_ifaces": "vcan1"}` | the Trace window's filter; a missing key keeps its setting |
+| `POST /trace/view {"tab": "uds", "view": "log"}` | Trace window tab (`monitor`, `uds`, `j1939`) and that tab's view (`monitor` aggregated, `log`) |
+| `POST /trace/goto {"index": 1234}` | show and select that trace frame in the Trace window |
+| `GET /value_search/hits?from=0&count=100` | the Value Search's state (`raw`, `signal`, `scanning`, `scanned` / `to_scan`, `status`, `hits`, `truncated`) and `list` of hits (`{"index", "ts_ns", "value"}`, up to 10000) |
+| `POST /value_search/raw {"id": "123", "data": "01 ?? FF"}` | Value Search on raw frames: hex id (empty: any) and data bytes (`??`: any); hits via `/value_search/hits` |
+| `GET /generator`, `POST /generator/add {"message": "Status", "iface": "vcan0", "interval_ms": 100}` (or `"id": "0x123", "dlc": 8`), `/generator/enable {"index": 0, "enabled": true, "interval_ms": 50}`, `/generator/remove {"index": 0}`, `/generator/signal {"signal": "Status.Depth", "value": 12.5}` | the Generator View's rows (`{"index", "name", "id", "iface", "interval_ms", "enabled", "data"}`); enabling needs a measurement (409); `signal` sets a physical value in row `index` or the message's first row. All take `"tab"` (title; default current) |
+| `GET /macros`, `POST /macros/run {"name": "m"}`, `/macros/stop` | the workspace's macros (`name`, `steps`, `running`); run / stop one (409 while it runs) |
+| `POST /script/file {"path": "/abs/x.py", "run": true}`, `/script/stop`, `GET /script/output` | load (and run) a file in the Script window; stop the script; its console text, `running`, `file` |
+| `POST /workspace/open {"path": "/abs/w.kraken"}`, `/workspace/save {"path": ...}` | open (before the next frame, stops the measurement) / save (no path: the current file) |
+| `GET /tab`, `POST /tab/new {"title"}`, `/tab/switch`, `/tab/close {"title" or "index"}`, `/tab/rename {"title", "name"}` | workspace tabs: `{"tabs", "current", "workspace"}`; the last tab is not closed (409) |
+| `POST /graph/export {"graph": "Graph 2", "path": "/abs/g.csv"}` | a graph window to .csv (signal, unit, time_s, value) or .png (rendered after the next frame) |
+| `POST /convert/database {"in", "out"}`, `/convert/log {"in", "out"}`, `/convert/cancel`, `GET /convert/status` | Convert: a database at once; a log in the background (format by `out`'s extension), polled with `status` (`busy`, `read_frames`, `written`, `total`, `status`) |
+| `GET /watch`, `POST /watch/add {"signals": "Status.Depth, Rate"}`, `/watch/reset` | the tab's Watch window: `{"items": [{"signal", "has_value", "value", "min", "max", "count"}]}`; `add` opens it |
+| `GET /settings`, `POST /settings {"theme": "dark", "font_scale": 120}` | theme (`system`, `light`, `dark`) and font scale (100..175 %), applied and saved |
 
 ```bash
 curl -s localhost:8321/status
@@ -287,14 +313,21 @@ claude mcp add kraken -- uv run "$env:LOCALAPPDATA\Programs\Kraken Explorer\krak
 ```
 
 Tools: `status`, `list_commands` / `run_command` (any menu command), `list_windows` / `focus_window`,
-`create_vcan`, `enable_interface`, `load_database`, `list_signals`, `open_graph` (time or XY),
+`create_vcan`, `enable_interface`, `load_database`, `get_interface` / `configure_interface` (bitrate, sample
+point, CAN FD, listen-only, one-shot, auto-restart, LIN settings), `load_ldf`, `reload_databases`, `set_link`
+(SocketCAN up / down), `can_status`, `list_signals`, `open_graph` (time or XY),
 `value_search`, `run_script` (Python in the app), `simulator` (starts / stops
 `examples/tentacle_sim.py` as its own process and returns the path of `tentacle.dbc`), `measurement`, `record`, `trace_clear`, `trace_save`, `send_frame` (raw CAN), `uds_request` (any raw UDS request, decoded
 answer), `uds_session`, `uds_tester_present`, `uds_ecu_reset`, `uds_security_access` (request seed /
 send key per level), `uds_scan`, `uds_services`, `uds_dids`, `read_dtcs` (the codes as the 6 hex digit
 form the DTC text files use, with their status byte), `clear_dtcs`, `write_dtc_file`, which
 writes or extends a `<code> <text>` file for one product that the UDS window's **DTC text** > Load
-reads, and `write_did_file`, the same for DID names. A typical session: "scan vcan0 for ECUs, read the DTCs of the engine ECU and write
+reads, and `write_did_file`, the same for DID names. Replay and trace: `replay_load`, `replay_status`,
+`replay_control` (play / pause / resume / step / stop), `replay_config` (speed, loop, range, breakpoints),
+`replay_channel`, `trace_frames` (decoded), `trace_filter`, `trace_view`, `trace_goto`, `raw_search`, `value_search_hits`.
+Control: `generator_list` / `generator_add` / `generator_enable` / `generator_remove` / `generator_set_signal`
+(periodic transmit), `macros`, `script_file` / `script_stop` / `script_output`, `workspace` (open / save),
+`tabs`, `graph_export` (CSV / PNG), `convert` (database / log), `watch`, `settings` (theme, font scale). A typical session: "scan vcan0 for ECUs, read the DTCs of the engine ECU and write
 `dtc_engine.txt` with a description of each code". Or: "create vcan0, run the tentacle simulator on it with its DBC, start measuring and
 plot Tentacle1 Angle against Curl".
 

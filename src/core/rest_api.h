@@ -51,3 +51,6 @@ void rest_api_stop(RestApi& api, App& app);
 // Value of "key" in a flat JSON object as text: strings unescaped, numbers / true / false as
 // written, "" when missing. ponytail: flat objects only, no \uXXXX; nest when a route needs it.
 [[nodiscard]] std::string json_get(std::string_view body, std::string_view key);
+
+// s as a JSON string literal, quotes and escapes included.
+[[nodiscard]] std::string json_string(std::string_view s);

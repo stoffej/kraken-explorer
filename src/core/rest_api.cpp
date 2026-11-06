@@ -17,6 +17,7 @@
   along with Kraken Explorer.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "core/rest_api.h"
+#include "core/rest_api_routes.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -45,12 +46,6 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
-namespace
-{
-
-// ponytail: one connection at a time, HTTP/1.0, bodies up to 1 MB; enough for curl and scripts.
-constexpr std::size_t max_request = 1 << 20;
-
 std::string json_string(std::string_view s)
 {
     std::string out = "\"";
@@ -68,6 +63,13 @@ std::string json_string(std::string_view s)
     }
     return out + '"';
 }
+
+namespace
+{
+
+// ponytail: one connection at a time, HTTP/1.0, bodies up to 1 MB; enough for curl and scripts.
+constexpr std::size_t max_request = 1 << 20;
+
 
 std::string status_json(App& app)
 {
@@ -1018,6 +1020,13 @@ std::string rest_api_handle(App& app, std::string_view method, std::string_view 
         const bool started = python_run(app, app.python, code, "<rest>");
         status = started ? 200 : 409;
         return started ? "{\"started\":true}" : "{\"error\":\"a script is running\"}";
+    }
+    for (const auto routes : {rest_setup_routes, rest_replay_routes, rest_control_routes})
+    {
+        if (std::optional<std::string> r = routes(app, method, path, body, status))
+        {
+            return *r;
+        }
     }
     status = 404;
     return "{\"error\":\"no such route\"}";

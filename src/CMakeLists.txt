@@ -4,7 +4,8 @@ endforeach()
 
 # app.cpp (per-frame flow, measurement start/stop) and core/rest_api.cpp (HTTP control, calls it):
 # a library so the tests reach them too.
-add_library(kraken_app STATIC app.cpp core/rest_api.cpp)
+add_library(kraken_app STATIC app.cpp core/rest_api.cpp core/rest_api_setup.cpp core/rest_api_replay.cpp
+            core/rest_api_control.cpp)
 target_link_libraries(kraken_app PUBLIC kraken_ui kraken_python)
 if(WIN32)
     target_link_libraries(kraken_app PUBLIC ws2_32) # core/rest_api.cpp
