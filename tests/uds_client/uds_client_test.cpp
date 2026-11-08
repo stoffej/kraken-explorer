@@ -7,6 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <vector>
 
 #include "decoders/uds_client.h"
@@ -251,6 +252,40 @@ TEST_CASE("DTC list text")
     const Bytes req = {0x19, 0x02, 0xFF};
     const Bytes rsp = {0x59, 0x02, 0xFF, 0x01, 0x23, 0x00, 0x2F, 0xC1, 0x55, 0x10, 0x09};
     CHECK(uds_describe(req, rsp) == "2 DTCs\n  P0123-00  status 0x2F testFailed|testFailedThisCycle|pending|confirmed|testFailedSinceClear\n  U0155-10  status 0x09 testFailed|confirmed");
+}
+
+TEST_CASE("extended data and snapshot records: raw, and split by the DTC text file's ext / snap lines")
+{
+    const Bytes req = {0x19, 0x06, 0x01, 0x01, 0x00, 0xFF};
+    // P0101 status 0x09, record 01 (counters), record 02 (two timestamps), record 03 (odometer, hours, 0.1 V)
+    const Bytes rsp = {0x59, 0x06, 0x01, 0x01, 0x00, 0x09, 0x01, 0x03, 0x02, 0x02, 0x69, 0x0F, 0x5A, 0x00, 0x69, 0x0F, 0x6E,
+                       0x40, 0x03, 0x01, 0xE2, 0x40, 0x04, 0xD2, 0x8A};
+    CHECK(uds_describe(req, rsp) == "DTC P0101-00  status 0x09 testFailed|confirmed\n  records: 01 03 02 02 69 0F 5A 00 69 0F 6E 40 03 01 E2 40 04 D2 8A");
+    CHECK(uds_describe(Bytes{0x19, 0x06, 0x01, 0x01, 0x00, 0x01}, Bytes{0x59, 0x06, 0x01, 0x01, 0x00, 0x09, 0x01, 0x03, 0x02})
+          == "DTC P0101-00  status 0x09 testFailed|confirmed\n  record 0x01: 03 02");
+
+    UdsDtcDefs defs;
+    CHECK(parse_dtc_defs("# texts\n010100 MAF\next 01 occurrences:u8 aging:u8\next 02 first:time last:time\n"
+                         "ext 03 odometer_km:u24 hours:u16 voltage_V:u8*0.1\next zz bad:u8\n"
+                         "snap F40C rpm:u16*0.25\nsnap F40D speed_kmh:u8\nsnap F405 coolant_C:u8-40\n", defs) == 6);
+    CHECK(defs.ext.at(0x02).size == 8);
+    CHECK(defs.snap.at(0xF405).offset == -40.0);
+    CHECK(uds_dtc_record_text(rsp, defs) == "DTC P0101-00  status 0x09 testFailed|confirmed\n  record 0x01: occurrences 3 aging 2"
+                                            "\n  record 0x02: first 2025-11-08 14:56:00Z last 2025-11-08 16:22:24Z"
+                                            "\n  record 0x03: odometer_km 123456 hours 1234 voltage_V 13.8");
+    // An undefined record ends the split: its length is unknown.
+    defs.ext.erase(0x02);
+    CHECK(uds_dtc_record_text(rsp, defs) == "DTC P0101-00  status 0x09 testFailed|confirmed\n  record 0x01: occurrences 3 aging 2"
+                                            "\n  record 0x02: 69 0F 5A 00 69 0F 6E 40 03 01 E2 40 04 D2 8A");
+
+    // Snapshot: record 01 with three DIDs (rpm 3000, 79 km/h, 90 C), record 02 with one unknown DID.
+    const Bytes snap = {0x59, 0x04, 0x01, 0x01, 0x00, 0x09, 0x01, 0x03, 0xF4, 0x0C, 0x2E, 0xE0, 0xF4, 0x0D, 0x4F, 0xF4, 0x05, 0x82,
+                        0x02, 0x01, 0xAA, 0xBB, 0x01};
+    CHECK(uds_describe(Bytes{0x19, 0x04, 0x01, 0x01, 0x00, 0x01}, Bytes{0x59, 0x04, 0x01, 0x01, 0x00, 0x09, 0x01, 0x01, 0xF4, 0x0D, 0x4F})
+          == "DTC P0101-00  status 0x09 testFailed|confirmed\n  snapshot 0x01: 01 F4 0D 4F");
+    CHECK(uds_dtc_record_text(snap, defs) == "DTC P0101-00  status 0x09 testFailed|confirmed"
+                                             "\n  snapshot 0x01: rpm 3000 speed_kmh 79 coolant_C 90"
+                                             "\n  snapshot 0x02: AA BB 01");
 }
 
 TEST_CASE("CAN FD: long single frame and 64-byte consecutive frames")

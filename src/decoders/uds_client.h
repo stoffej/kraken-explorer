@@ -179,6 +179,37 @@ struct UdsDidValue
 // how many lines were entries.
 int parse_code_lines(std::string_view text, std::map<uint32_t, std::string>& out);
 
+// One field of a DTC record, manufacturer specific, so it comes from the DTC text file:
+// "ext <record> <name>:<type>[*scale][+offset] ..." lays out an extended data record (0x19 0x06),
+// "snap <DID> <name>:<type>[*scale][+offset]" one DID of a snapshot record (0x19 0x04). Types:
+// u8 u16 u24 u32 (big endian), time (u32 seconds since 1970, shown as UTC).
+struct UdsExtField
+{
+    std::string name;
+    uint8_t size = 1;
+    bool time = false;
+    double scale = 1.0;
+    double offset = 0.0;
+};
+struct UdsExtRecord
+{
+    std::vector<UdsExtField> fields;
+    std::size_t size = 0; // sum of the fields' bytes
+};
+struct UdsDtcDefs
+{
+    std::map<uint8_t, UdsExtRecord> ext; // extended data record number -> layout
+    std::map<uint16_t, UdsExtField> snap; // snapshot DID -> its one field
+    [[nodiscard]] bool empty() const noexcept { return ext.empty() && snap.empty(); }
+};
+// Reads the "ext" and "snap" lines of a DTC text file into `out`; other lines are skipped.
+// Returns how many definitions were read.
+int parse_dtc_defs(std::string_view text, UdsDtcDefs& out);
+// A 59 04 (snapshot) or 59 06 (extended data) response with its records split and named by
+// `defs`; a record or DID without a definition ends the split and the rest is shown as hex (its
+// length is unknown).
+[[nodiscard]] std::string uds_dtc_record_text(std::span<const uint8_t> response, const UdsDtcDefs& defs);
+
 // --- Address discovery ---
 
 struct UdsEcu

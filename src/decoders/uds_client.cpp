@@ -23,10 +23,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <format>
 #include <map>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include "decoders/decoders.h"
 
@@ -784,18 +786,41 @@ std::string dtc_status(uint8_t st)
     return s.empty() ? "none" : s;
 }
 
+// One "code status" entry: the ISO 15031-6 letter is in the top two bits (P C B U), the rest as digits.
+std::string dtc_entry(std::span<const uint8_t> d)
+{
+    const uint8_t hi = d[0];
+    return std::format("{}{:01X}{:01X}{:02X}-{:02X}  status 0x{:02X} {}", "PCBU"[hi >> 6], (hi >> 4) & 0x3, hi & 0x0F,
+                       d[1], d[2], d[3], dtc_status(d[3]));
+}
+
 std::string dtc_list(std::span<const uint8_t> dtcs)
 {
     std::string s;
     int n = 0;
     for (std::size_t i = 0; i + 4 <= dtcs.size(); i += 4, ++n)
     {
-        // The ISO 15031-6 letter is in the top two bits (P C B U), the rest as digits.
-        const uint8_t hi = dtcs[i];
-        s += std::format("\n  {}{:01X}{:01X}{:02X}-{:02X}  status 0x{:02X} {}", "PCBU"[hi >> 6], (hi >> 4) & 0x3,
-                         hi & 0x0F, dtcs[i + 1], dtcs[i + 2], dtcs[i + 3], dtc_status(dtcs[i + 3]));
+        s += "\n  " + dtc_entry(dtcs.subspan(i, 4));
     }
     return std::format("{} DTC{}{}", n, n == 1 ? "" : "s", s);
+}
+
+// 59 04 / 59 06 without record layouts: the DTC, then the raw records. A single requested record
+// is named; "all" (0xFF) cannot be split without knowing each record's length.
+std::string dtc_record_raw(std::span<const uint8_t> request, std::span<const uint8_t> response)
+{
+    if (response.size() < 6)
+    {
+        return std::format("DTC record: {}", hex_bytes(response.subspan(1)));
+    }
+    const std::span<const uint8_t> records = response.subspan(6);
+    const bool single_record = request.size() >= 6 && request[5] != 0xFF && !records.empty();
+    const char* kind = response[1] == 0x04 ? "snapshot" : "record";
+    if (single_record)
+    {
+        return std::format("DTC {}\n  {} 0x{:02X}: {}", dtc_entry(response.subspan(2, 4)), kind, records[0], hex_bytes(records.subspan(1)));
+    }
+    return std::format("DTC {}\n  {}s: {}", dtc_entry(response.subspan(2, 4)), kind, hex_bytes(records));
 }
 
 } // namespace
@@ -1126,7 +1151,7 @@ std::string uds_describe(std::span<const uint8_t> request, std::span<const uint8
         }
         if (sub == 0x04 || sub == 0x06)
         {
-            return std::format("DTC record: {}", hex_bytes(response.subspan(1)));
+            return dtc_record_raw(request, response);
         }
         break;
     }
@@ -1303,4 +1328,223 @@ int parse_code_lines(std::string_view text, std::map<uint32_t, std::string>& out
         ++n;
     }
     return n;
+}
+
+namespace
+{
+
+// The first blank-separated word of `rest`, removed from it ("" when rest is empty).
+std::string_view next_word(std::string_view& rest)
+{
+    rest = trim(rest);
+    const std::size_t blank = rest.find_first_of(" \t");
+    const std::string_view word = rest.substr(0, blank);
+    rest = blank == std::string_view::npos ? std::string_view() : rest.substr(blank);
+    return word;
+}
+
+// "u8" / "u16" / "u24" / "u32" / "time" -> the field's size (and time flag); false for anything else.
+bool parse_field_type(std::string_view type_name, UdsExtField& field)
+{
+    static constexpr std::pair<std::string_view, uint8_t> sizes[] = {{"u8", 1}, {"u16", 2}, {"u24", 3}, {"u32", 4}, {"time", 4}};
+    for (const auto& [name, size] : sizes)
+    {
+        if (type_name == name)
+        {
+            field.size = size;
+            field.time = name == "time";
+            return true;
+        }
+    }
+    return false;
+}
+
+// "*0.25-40": every "*scale", "+offset" or "-offset" in turn.
+void parse_field_modifiers(std::string_view modifiers, UdsExtField& field)
+{
+    while (!modifiers.empty())
+    {
+        const char sign = modifiers[0];
+        const std::size_t next = modifiers.find_first_of("*+-", 1);
+        const std::string_view number_text = modifiers.substr(1, next == std::string_view::npos ? next : next - 1);
+        double number = 0.0;
+        if (parse_number(number_text, number))
+        {
+            if (sign == '*')
+            {
+                field.scale = number;
+            }
+            else
+            {
+                field.offset = sign == '-' ? -number : number;
+            }
+        }
+        modifiers = next == std::string_view::npos ? std::string_view() : modifiers.substr(next);
+    }
+}
+
+// "<name>:<type>[*scale][+offset]" -> field; false when the word is not of that form.
+bool parse_field(std::string_view word, UdsExtField& field)
+{
+    const std::size_t colon = word.find(':');
+    if (colon == std::string_view::npos)
+    {
+        return false;
+    }
+    field.name = std::string(word.substr(0, colon));
+    const std::string_view type_and_modifiers = word.substr(colon + 1);
+    const std::size_t first_modifier = type_and_modifiers.find_first_of("*+-");
+    if (first_modifier != std::string_view::npos)
+    {
+        parse_field_modifiers(type_and_modifiers.substr(first_modifier), field);
+    }
+    return parse_field_type(type_and_modifiers.substr(0, first_modifier), field);
+}
+
+// " name value" for one field read big endian from bytes (bytes.size() >= field.size).
+void append_field_value(std::string& out, const UdsExtField& field, std::span<const uint8_t> bytes)
+{
+    uint64_t raw = 0;
+    for (std::size_t i = 0; i < field.size; ++i)
+    {
+        raw = raw << 8 | bytes[i];
+    }
+    if (field.time)
+    {
+        const std::chrono::sys_seconds when{std::chrono::seconds{raw}};
+        out += std::format(" {} {:%Y-%m-%d %H:%M:%S}Z", field.name, when);
+    }
+    else if (field.scale != 1.0 || field.offset != 0.0)
+    {
+        out += std::format(" {} {:g}", field.name, static_cast<double>(raw) * field.scale + field.offset);
+    }
+    else
+    {
+        out += std::format(" {} {}", field.name, raw);
+    }
+}
+
+// One extended data record at the front of `bytes`: appends its line and returns how many bytes it
+// took, 0 when its layout is unknown (the rest cannot be split then).
+std::size_t append_extended_record(std::string& out, std::span<const uint8_t> bytes, const UdsDtcDefs& defs)
+{
+    const uint8_t record_number = bytes[0];
+    const auto layout = defs.ext.find(record_number);
+    if (layout == defs.ext.end() || bytes.size() < 1 + layout->second.size)
+    {
+        return 0;
+    }
+    out += std::format("\n  record 0x{:02X}:", record_number);
+    std::size_t at = 1;
+    for (const UdsExtField& field : layout->second.fields)
+    {
+        append_field_value(out, field, bytes.subspan(at));
+        at += field.size;
+    }
+    return at;
+}
+
+// One snapshot record at the front of `bytes`: record number, number of DIDs, then DID (2 bytes)
+// + value each. Appends its line and returns the bytes taken, 0 when a DID has no definition.
+std::size_t append_snapshot_record(std::string& out, std::span<const uint8_t> bytes, const UdsDtcDefs& defs)
+{
+    if (bytes.size() < 2)
+    {
+        return 0;
+    }
+    const uint8_t record_number = bytes[0];
+    const int did_count = bytes[1];
+    std::string line = std::format("\n  snapshot 0x{:02X}:", record_number);
+    std::size_t at = 2;
+    for (int i = 0; i < did_count; ++i)
+    {
+        if (at + 2 > bytes.size())
+        {
+            return 0;
+        }
+        const auto did = static_cast<uint16_t>(bytes[at] << 8 | bytes[at + 1]);
+        const auto field = defs.snap.find(did);
+        if (field == defs.snap.end() || at + 2 + field->second.size > bytes.size())
+        {
+            return 0;
+        }
+        append_field_value(line, field->second, bytes.subspan(at + 2));
+        at += 2 + field->second.size;
+    }
+    out += line;
+    return at;
+}
+
+} // namespace
+
+int parse_dtc_defs(std::string_view text, UdsDtcDefs& out)
+{
+    int defined = 0;
+    for (std::size_t at = 0; at < text.size();)
+    {
+        std::size_t end = text.find('\n', at);
+        end = end == std::string_view::npos ? text.size() : end;
+        std::string_view rest = text.substr(at, end - at);
+        at = end + 1;
+
+        const std::string_view keyword = next_word(rest);
+        const bool extended = keyword == "ext";
+        const bool snapshot = keyword == "snap";
+        if (!extended && !snapshot)
+        {
+            continue;
+        }
+        uint32_t id = 0; // the record number (ext) or the DID (snap)
+        if (!parse_number(next_word(rest), id, 16) || id > (extended ? 0xFFu : 0xFFFFu))
+        {
+            continue;
+        }
+        UdsExtRecord record;
+        for (std::string_view word = next_word(rest); !word.empty(); word = next_word(rest))
+        {
+            UdsExtField field;
+            if (parse_field(word, field))
+            {
+                record.size += field.size;
+                record.fields.push_back(std::move(field));
+            }
+        }
+        if (record.fields.empty())
+        {
+            continue;
+        }
+        if (extended)
+        {
+            out.ext[static_cast<uint8_t>(id)] = std::move(record);
+        }
+        else
+        {
+            out.snap[static_cast<uint16_t>(id)] = std::move(record.fields.front()); // one DID, one field
+        }
+        ++defined;
+    }
+    return defined;
+}
+
+std::string uds_dtc_record_text(std::span<const uint8_t> response, const UdsDtcDefs& defs)
+{
+    if (response.size() < 6 || response[0] != 0x59 || (response[1] != 0x04 && response[1] != 0x06))
+    {
+        return uds_describe({}, response);
+    }
+    const bool snapshot = response[1] == 0x04;
+    std::string out = "DTC " + dtc_entry(response.subspan(2, 4));
+    std::span<const uint8_t> rest = response.subspan(6);
+    while (!rest.empty())
+    {
+        const std::size_t taken = snapshot ? append_snapshot_record(out, rest, defs) : append_extended_record(out, rest, defs);
+        if (taken == 0) // no definition for this record: its length is unknown, the rest stays hex
+        {
+            const std::size_t header = std::min<std::size_t>(snapshot ? 2 : 1, rest.size()); // record number (+ DID count)
+            out += std::format("\n  {} 0x{:02X}: {}", snapshot ? "snapshot" : "record", rest[0], hex_bytes(rest.subspan(header)));
+            break;
+        }
+        rest = rest.subspan(taken);
+    }
+    return out;
 }
