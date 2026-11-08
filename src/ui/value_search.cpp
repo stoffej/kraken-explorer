@@ -58,20 +58,18 @@ void value_search_hit_clicked(App& app, ValueSearch& v, WorkspaceTab& tab, int h
 {
     v.selected = hit;
     const ValueHit& h = v.hits[static_cast<std::size_t>(hit)];
-    // Log on the frame; the graph that already plots the signal follows it. A signal in no
-    // graph is not added silently: the "Plot in..." popup asks which graph gets it.
+    // Log on the frame, and the graph that plots the signal centres on the sample (cursors on it, Y
+    // fitted). A signal no graph plots goes into the tab's first graph (a new one when it has none)
+    // with the trace's history, so the clicked value is always on screen.
     log_goto(app, tab, h.index);
-    if (tab.graphs.empty() || v.raw || !v.signal)
+    if (v.raw || !v.signal)
     {
         return;
     }
     const auto has = std::ranges::find_if(tab.graphs, [&](const GraphState& g)
                                           { return graph_has_signal(g, app.setup, *v.signal); });
-    v.plot_pending = has == tab.graphs.end();
-    if (!v.plot_pending)
-    {
-        graph_show_range(*has, app.setup, *v.signal, h.ts_ns, h.ts_ns);
-    }
+    GraphState& g = has != tab.graphs.end() ? *has : tab.graphs.empty() ? graph_new(tab) : tab.graphs.front();
+    graph_show_range(g, app.setup, *v.signal, h.ts_ns, h.ts_ns);
 }
 
 namespace
@@ -468,7 +466,8 @@ namespace
 {
 
 // The hits table: Time, then the value (signal) or the frame's id and data (raw), and the Index as
-// the Log shows it. A click shows the frame in the Trace window and the Graph around it.
+// the Log shows it. A click shows the frame in the Trace window and the Graph around it (plotting
+// the signal there first when no graph has it).
 void draw_hits(App& app, ValueSearch& v, WorkspaceTab& tab)
 {
     // Hits name frames that are gone: all of them when the trace was cleared or left its file
@@ -522,6 +521,32 @@ void draw_hits(App& app, ValueSearch& v, WorkspaceTab& tab)
             {
                 value_search_hit_clicked(app, v, tab, r);
             }
+            if (vim_yank_right_click(v.vim)) // the row's cells to the copy menu
+            {
+                std::vector<VimYankItem>& items = v.yank_items;
+                items.assign({{.label = "Row"}, {.label = "Time", .text = b}});
+                if (v.raw)
+                {
+                    const BusMessage m = trace_at(app.trace, h.index);
+                    std::string id;
+                    append_id(id, m);
+                    std::string data;
+                    append_data(data, m, false);
+                    items.push_back({.label = "ID", .text = id});
+                    items.push_back({.label = "Data", .text = data});
+                }
+                else
+                {
+                    items.push_back({.label = "Value", .text = std::format("{:g}", h.value)});
+                }
+                std::string index;
+                append_grouped(index, h.index - app.trace.begin + 1);
+                items.push_back({.label = "Index", .text = index});
+                for (std::size_t i = 1; i < items.size(); ++i)
+                {
+                    items[0].text += (i > 1 ? "\t" : "") + items[i].text;
+                }
+            }
             ImGui::PopID();
             ImGui::TableNextColumn();
             if (v.raw)
@@ -546,52 +571,7 @@ void draw_hits(App& app, ValueSearch& v, WorkspaceTab& tab)
         }
     }
     ImGui::EndTable();
-
-    // "Plot in ..." popup for a clicked hit whose signal no graph has: pick the graph (or a
-    // new one) that gets it, centred on the sample. Clicking elsewhere closes it. It follows
-    // `selected`, which every change of the hits keeps in step (a prune shifts it, a new scan
-    // or a cleared list resets it): the popup closes when its hit is gone.
-    if (v.plot_pending && (v.selected < 0 || v.selected >= static_cast<int>(v.hits.size()) || !v.signal || v.raw))
-    {
-        v.plot_pending = false;
-    }
-    if (v.plot_pending)
-    {
-        if (!ImGui::IsPopupOpen("##plot_in_graph"))
-        {
-            ImGui::OpenPopup("##plot_in_graph");
-        }
-        if (ImGui::BeginPopup("##plot_in_graph"))
-        {
-            ImGui::TextUnformatted(std::format("Plot {} in:", v.signal->label).c_str());
-            ImGui::Separator();
-            GraphState* target = nullptr;
-            for (GraphState& g : tab.graphs)
-            {
-                const std::string title = g.id == 0 ? std::string("Graph") : std::format("Graph {}", g.id);
-                if (ImGui::Selectable(title.c_str()))
-                {
-                    target = &g;
-                }
-            }
-            if (ImGui::Selectable("New Graph"))
-            {
-                target = &graph_new(tab);
-            }
-            if (target != nullptr)
-            {
-                const int64_t ts = v.hits[static_cast<std::size_t>(v.selected)].ts_ns;
-                graph_show_range(*target, app.setup, *v.signal, ts, ts);
-                v.plot_pending = false;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        else
-        {
-            v.plot_pending = false;
-        }
-    }
+    vim_yank_menu(v.vim, v.yank_items);
 }
 
 // Raw mode: an id and / or a data byte pattern.

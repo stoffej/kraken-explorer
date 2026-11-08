@@ -90,6 +90,7 @@ struct GraphSignal
     uint32_t color = 0xFFFFFFFF;         // ImU32
     int axis = -1;                       // plot slot, -1 = automatic by unit
     bool hidden = false;
+    bool backfill = false;               // just added (a Value Search hit, "Add to Graph"): next ingest reads the trace's history too
     std::vector<double> t;               // seconds since GraphState::start_ns
     std::vector<double> v;               // physical value
     double seen_min = 0.0;               // range of v, gauge scale when the DBC has none
@@ -160,6 +161,7 @@ struct GraphState
     double x_min = 0.0;
     double x_max = 60.0;
     bool follow = true;       // X follows the newest data; off after user zoom/pan
+    int fit_y = 0;            // frames left of fitting Y to the visible samples after centre_on (follow is off then)
     bool cursor_on = false;   // "Cursors": drag lines A and B, value per signal at each and the difference
     double cursor_a = 0.0;    // seconds since start_ns, as the X axis
     double cursor_b = 0.0;

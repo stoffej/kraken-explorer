@@ -314,6 +314,7 @@ void add_search_hit(GraphState& g, const Setup& setup, const SignalEntry& e)
     GraphSignal s = e.can_sig != nullptr ? make_can_signal(net, e.raw_id, *e.can_msg, *e.can_sig)
                                          : make_lin_signal(net, static_cast<uint8_t>(e.raw_id), *e.lin_frame, *e.lin_sig);
     s.color = graph_next_color(g);
+    s.backfill = true;
     g.signals.push_back(std::move(s));
 }
 
@@ -804,8 +805,9 @@ void draw_plots(App& app, GraphState& g, std::span<const int> slots, const Graph
             }
             ImPlotAxisFlags flags = k > 0 ? ImPlotAxisFlags_AuxDefault : ImPlotAxisFlags_None;
             // A file view keeps fitting Y to the visible window: its samples are that window only.
-            flags |= png == nullptr && (g.follow || !app.trace.file.empty()) ? ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit
-                                                                              : ImPlotAxisFlags_None;
+            flags |= png == nullptr && (g.follow || g.fit_y > 0 || !app.trace.file.empty())
+                         ? ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit
+                         : ImPlotAxisFlags_None;
             if (first != nullptr)
             {
                 ImPlot::PushStyleColor(ImPlotCol_AxisText, png_color(png, ImGui::ColorConvertU32ToFloat4(first->color)));
@@ -1505,6 +1507,7 @@ void centre_on(GraphState& g, int64_t t0_ns, int64_t t1_ns)
     const double b = static_cast<double>(t1_ns - g.start_ns) * 1e-9;
     const double pad = std::max((b - a) * 0.25, 5.0); // a single sample: 10 s of context around it
     g.follow = false;
+    g.fit_y = 3; // the samples of the new window arrive a frame later; fit Y to them, not to the old ones
     g.x_min = a - pad;
     g.x_max = b + pad;
     g.cursor_on = true;
@@ -2255,7 +2258,12 @@ void ingest_frames(GraphState& g, const App& app)
         g.next_index = tr.end;
         return;
     }
-    const uint64_t first = std::max(g.next_index, tr.begin);
+    // A signal just added for a Value Search hit or "Add to Graph" takes the history the trace still
+    // holds, so a hit in the past is on its curve. ponytail: with a time base already set, history
+    // before it lands at negative t; the other signals keep their samples (nothing re-read for them).
+    const uint64_t live_from = std::max(g.next_index, tr.begin);
+    const bool backfill = std::ranges::any_of(g.signals, [](const GraphSignal& s) { return s.backfill; });
+    const uint64_t first = backfill ? tr.begin : live_from;
     if (g.start_ns < 0 && first < tr.end)
     {
         // t0 = earliest frame of the first batch, so no sample lands at a negative time.
@@ -2279,6 +2287,10 @@ void ingest_frames(GraphState& g, const App& app)
         g.last_t = std::max(g.last_t, t);
         for (auto& s : g.signals)
         {
+            if (i < live_from && !s.backfill)
+            {
+                continue;
+            }
             switch (s.kind)
             {
             case GraphSignalKind::Can:
@@ -2314,6 +2326,10 @@ void ingest_frames(GraphState& g, const App& app)
         g.last_wall = wall_seconds();
     }
     g.next_index = tr.end;
+    for (auto& s : g.signals)
+    {
+        s.backfill = false;
+    }
     // A quiet bus gets no frames of its own: age the bus-load windows so the curve falls to 0.
     if (app.measuring && g.start_ns >= 0)
     {
@@ -2332,6 +2348,7 @@ void ingest_frames(GraphState& g, const App& app)
 
 void graph_ingest(GraphState& g, const App& app)
 {
+    g.fit_y = std::max(0, g.fit_y - 1);
     ingest_frames(g, app);
     if (g.show_t0_ns >= 0 && g.start_ns >= 0) // a Value Search hit plotted into a New Graph
     {

@@ -325,12 +325,8 @@ TEST_CASE("Value Search: the stretches of a value range, a click syncs the Log a
     f.frame();
     REQUIRE(v.selected == 2);
 
-    // Angle is in no graph yet: the "Plot in..." popup asks which graph gets it; pick "Graph".
-    ImGuiContext& ctx = *ImGui::GetCurrentContext();
-    REQUIRE(ctx.OpenPopupStack.Size == 1);
-    ImGuiWindow* popup = ctx.OpenPopupStack[0].Window;
-    REQUIRE(popup != nullptr);
-    ImGui::ActivateItemByID(ImHashStr("Graph", 0, popup->ID));
+    // Angle is in no graph yet: the click puts it into the tab's graph itself, no popup to answer.
+    CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
     f.frame();
 
     // The Log: the frame selected with three rows of context above it, no longer following the end.
@@ -438,7 +434,7 @@ TEST_CASE("graph: file view restored after replay clears it, new signal gets dat
     REQUIRE_FALSE(g.signals[0].t.empty());    // visible window populated
 }
 
-TEST_CASE("Value Search: Plot in > New Graph centres the new graph on the hit once it has a time base")
+TEST_CASE("Value Search: a hit of an unplotted signal lands in the tab's graph, centred once it has a time base")
 {
     const UiTest ui({1600, 900}, true, true);
     FileView f;
@@ -451,15 +447,14 @@ TEST_CASE("Value Search: Plot in > New Graph centres the new graph on the hit on
     REQUIRE(v.hits.size() == 4);
     f.frame();
 
-    value_search_hit_clicked(f.app, v, f.tab, 2); // 14 s, no graph plots Angle: the popup is armed
-    REQUIRE(v.plot_pending);
+    REQUIRE(f.tab.graphs.size() == 1);
+    REQUIRE(f.tab.graphs[0].signals.empty());
+    value_search_hit_clicked(f.app, v, f.tab, 2); // 14 s, no graph plots Angle: the tab's graph gets it
+    REQUIRE(f.tab.graphs.size() == 1);
+    REQUIRE(f.tab.graphs[0].signals.size() == 1);
+    CHECK(f.tab.graphs[0].signals[0].name == "Angle");
     f.frame();
-    f.frame();
-    ImGuiContext& ctx = *ImGui::GetCurrentContext();
-    REQUIRE(ctx.OpenPopupStack.Size == 1);
-    ImGui::ActivateItemByID(ImHashStr("New Graph", 0, ctx.OpenPopupStack[0].Window->ID));
-    f.frame();
-    REQUIRE(f.tab.graphs.size() == 2);
+    CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
     for (int i = 0; i < 4; ++i) // as draw_graph_windows: every graph ingests (time base, then the centring)
     {
         ImGui::NewFrame();
@@ -469,8 +464,7 @@ TEST_CASE("Value Search: Plot in > New Graph centres the new graph on the hit on
         }
         ImGui::EndFrame();
     }
-    REQUIRE(f.tab.graphs.size() == 2);
-    const GraphState& g = f.tab.graphs[1];
+    const GraphState& g = f.tab.graphs[0];
     REQUIRE(g.start_ns == first_ts);
     CHECK(g.show_t0_ns == -1); // applied
     CHECK(g.cursor_on);

@@ -11,10 +11,13 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unistd.h>
 
 #include "app.h"
+#include "core/text.h"
+#include <imgui_internal.h>
 #include "db/dbc/dbc_parser.h"
 #include "ui/frame_cache.h"
 #include "ui/value_search.h"
@@ -303,7 +306,69 @@ TEST_CASE("hits from before a trace clear are dropped: their indices name frames
 #include <imgui.h>
 #include <imgui_internal.h> // FindWindowByName, the popup window's rect
 
-TEST_CASE("clicking a hit of an unplotted signal asks which graph gets it; a plotted one just follows")
+TEST_CASE("a right-click on a hit opens the copy menu: y copies time, value and index tab-separated")
+{
+    const UiTest ui({800.0f, 600.0f}, true, true);
+    Fixture f(false);
+    ValueSearch v;
+    v.setup_generation = f.app.setup.generation;
+    v.signal = f.entry();
+    v.hits = value_search_run(f.app, *f.angle_msg, *f.angle, 2.0, 3.0).hits;
+    REQUIRE(v.hits.size() >= 2);
+    WorkspaceTab tab;
+    tab.graphs.emplace_back();
+    const auto frame = [&]
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({800, 600});
+        draw_value_search(f.app, v, tab);
+        ImGui::EndFrame();
+    };
+    frame();
+    frame();
+    // Row 1's Selectable is "<time>" under PushID(1) in the hits table.
+    ImGuiWindow* w = nullptr;
+    for (ImGuiWindow* win : ImGui::GetCurrentContext()->Windows)
+    {
+        if (std::string_view(win->Name).find("Value Search") != std::string_view::npos && !win->ParentWindow)
+        {
+            w = win;
+        }
+    }
+    REQUIRE(w != nullptr);
+    const int row = 1;
+    const ImGuiID table = ImHashStr("##hits", 0, w->ID);
+    const int64_t first_ts = trace_at(f.app.trace, f.app.trace.begin).ts_ns;
+    const std::string time = format_duration(static_cast<double>(v.hits[1].ts_ns - first_ts) / 1e9);
+    const ImGuiID id = ImHashStr(time.c_str(), 0, ImHashData(&row, sizeof row, table));
+    ImGuiIO& io = ImGui::GetIO();
+    bool hovered = false;
+    for (float y = 0.0f; !hovered && y < 600.0f; y += 3.0f)
+    {
+        io.AddMousePosEvent(60.0f, y);
+        frame();
+        hovered = ImGui::GetCurrentContext()->HoveredId == id;
+    }
+    REQUIRE(hovered);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    frame();
+    frame();
+    CHECK(v.vim.yank_menu == 2);
+    REQUIRE(v.yank_items.size() == 4); // Row, Time, Value, Index
+    CHECK(v.yank_items[1].text == time);
+    CHECK(v.selected == -1); // a right-click copies, it does not jump the Log / graph
+    ImGui::SetClipboardText("");
+    io.AddInputCharacter('y');
+    frame();
+    const std::string line = ImGui::GetClipboardText();
+    CHECK(line == std::format("{}\t{:g}\t{}", time, v.hits[1].value, v.hits[1].index - f.app.trace.begin + 1));
+    CHECK(v.vim.yank_menu == 0);
+}
+
+TEST_CASE("clicking a hit plots its signal when no graph has it, with the trace's history, centred and Y fitted")
 {
     const UiTest ui({800.0f, 600.0f}, true, true); // implot: graph_next_color picks from the colormap
     Fixture f(false);
@@ -322,83 +387,44 @@ TEST_CASE("clicking a hit of an unplotted signal asks which graph gets it; a plo
     };
     frame();
 
-    // No graph has Angle: the click adds nothing silently, it arms the popup instead.
+    // No graph has Angle: the click puts it into the tab's graph, no popup, no question.
     value_search_hit_clicked(f.app, v, tab, 0);
-    CHECK(v.plot_pending);
     CHECK(v.selected == 0);
-    CHECK(tab.graphs.front().signals.empty());
+    REQUIRE(tab.graphs.size() == 1);
+    GraphState& g = tab.graphs.front();
+    REQUIRE(g.signals.size() == 1);
+    CHECK(g.signals[0].name == "Angle");
+    CHECK(g.signals[0].backfill);
     frame();
-    frame(); // the popup window exists from its second frame
-    ImGuiContext& g = *ImGui::GetCurrentContext();
-    REQUIRE(g.OpenPopupStack.Size == 1);
-    const ImGuiWindow* popup = g.OpenPopupStack[0].Window;
-    REQUIRE(popup != nullptr);
+    CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
 
-    // "New Graph" is the popup's last row: the signal lands in a fresh graph, centred on the hit.
-    ImGuiIO& io = ImGui::GetIO();
-    const auto click = [&](float x, float y)
-    {
-        io.AddMousePosEvent(x, y);
-        frame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-        frame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-        frame();
-        frame();
-    };
-    click(popup->Pos.x + popup->Size.x * 0.5f,
-          popup->Pos.y + popup->Size.y - ImGui::GetStyle().WindowPadding.y - ImGui::GetTextLineHeight() * 0.5f);
-    REQUIRE(tab.graphs.size() == 2);
-    CHECK(tab.graphs[1].id == 1);
-    REQUIRE(tab.graphs[1].signals.size() == 1);
-    CHECK(tab.graphs[1].signals[0].name == "Angle");
-    CHECK_FALSE(v.plot_pending);
-    CHECK(tab.graphs.front().signals.empty()); // the docked Graph was not touched
+    // The next ingest reads the live trace from its start, so the hit (in the past) is on the
+    // curve, the window is centred on it with the cursors there and Y is being fitted.
+    graph_ingest(g, f.app);
+    CHECK_FALSE(g.signals[0].backfill);
+    CHECK(g.signals[0].t.size() == 1000); // every Angle frame of the log
+    CHECK(g.start_ns == trace_at(f.app.trace, f.app.trace.begin).ts_ns);
+    const double hit_t = static_cast<double>(v.hits[0].ts_ns - g.start_ns) * 1e-9;
+    CHECK(g.cursor_on);
+    CHECK(g.cursor_a == doctest::Approx(hit_t));
+    CHECK(g.x_min == doctest::Approx(hit_t - 5.0));
+    CHECK(g.x_max == doctest::Approx(hit_t + 5.0));
+    CHECK_FALSE(g.follow);
+    CHECK(g.fit_y > 0);
+    const std::size_t had = g.signals[0].t.size();
+    graph_ingest(g, f.app); // nothing new, nothing re-read
+    CHECK(g.signals[0].t.size() == had);
 
-    // A hit of a signal some graph already plots follows that graph: no popup, no new
-    // graph, no duplicate signal. (Centring is skipped headless: the graph has no time base.)
+    // A hit of a signal some graph already plots follows that graph: no new graph, no duplicate.
     value_search_hit_clicked(f.app, v, tab, 1);
-    CHECK_FALSE(v.plot_pending);
-    CHECK(tab.graphs.size() == 2);
-    CHECK(tab.graphs[1].signals.size() == 1);
-    frame();
-    CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
-}
+    CHECK(tab.graphs.size() == 1);
+    CHECK(g.signals.size() == 1);
+    CHECK(g.cursor_a == doctest::Approx(static_cast<double>(v.hits[1].ts_ns - g.start_ns) * 1e-9));
 
-TEST_CASE("the Plot in popup follows its hit: a new scan or a cleared list closes it, no ghost later")
-{
-    const UiTest ui({800.0f, 600.0f}, true, true);
-    Fixture f(false);
-    ValueSearch v;
-    v.setup_generation = f.app.setup.generation;
-    v.signal = f.entry();
-    v.hits = value_search_run(f.app, *f.angle_msg, *f.angle, 2.0, 3.0).hits;
-    WorkspaceTab tab;
-    tab.graphs.emplace_back();
-    const auto frame = [&]
-    {
-        ImGui::NewFrame();
-        draw_value_search(f.app, v, tab);
-        ImGui::EndFrame();
-    };
-    frame();
-    value_search_hit_clicked(f.app, v, tab, 5);
-    frame();
-    frame();
-    REQUIRE(ImGui::GetCurrentContext()->OpenPopupStack.Size == 1);
-
-    // The trace is cleared under the open popup: its hit is gone, so is the popup...
-    trace_clear(f.app.trace);
-    frame();
-    frame();
-    CHECK_FALSE(v.plot_pending);
-    CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
-    // ...and fresh hits later do not bring it back for some other row.
-    trace_append(f.app.trace, replay_parse(candump_log(), TraceFileFormat::CanDump).frames);
-    v.hits = value_search_run(f.app, *f.angle_msg, *f.angle, 2.0, 3.0).hits;
-    frame();
-    frame();
-    CHECK_FALSE(v.plot_pending);
-    CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
-    CHECK(tab.graphs.front().signals.empty());
+    // A tab with no graph at all gets one.
+    WorkspaceTab bare;
+    value_search_hit_clicked(f.app, v, bare, 0);
+    REQUIRE(bare.graphs.size() == 1);
+    REQUIRE(bare.graphs[0].signals.size() == 1);
+    CHECK(bare.graphs[0].signals[0].name == "Angle");
 }

@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "ui/signal_search.h"
+#include "ui/vim_nav.h"
 
 struct App;
 struct BusMessage;
@@ -87,7 +88,8 @@ struct ValueSearch
     bool truncated = false;
     std::string status;
     int selected = -1;
-    bool plot_pending = false; // the "Plot in..." popup for hits[selected], whose signal no graph plots
+    VimNav vim;                 // right-click on a hit: the copy menu (vim_yank_menu) at the mouse
+    std::vector<VimYankItem> yank_items;
     // A scan of a file view runs on the worker (a 20 M-frame signal takes ~1 s): progress in
     // `scanned` of `to_scan`, the result through `job`; a newer scan or a window close stops it.
     // range_only: the scan after a pick, only its seen_min / seen_max are wanted (the bounds).
@@ -132,6 +134,6 @@ bool value_search_poll(ValueSearch& v);
 // The tab's "Value Search" window (a tab next to Python Script).
 void draw_value_search(App& app, ValueSearch& v, WorkspaceTab& tab);
 
-// A click on hit row `hit`: selects it, shows it in the Log, and follows it in the graph
-// that plots the signal — or arms the "Plot in..." popup (ValueSearch::plot_pending) when none does.
+// A click on hit row `hit`: selects it, shows it in the Log, and centres the graph that plots the
+// signal on it; when none does, the tab's first graph (a new one when it has none) gets the signal.
 void value_search_hit_clicked(App& app, ValueSearch& v, WorkspaceTab& tab, int hit);
