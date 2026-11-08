@@ -28,6 +28,9 @@
 #include <memory>
 
 #include <imgui.h>
+#include <imgui_internal.h>
+#include <string>
+#include <string_view>
 #include <pugixml.hpp>
 
 #include "app.h"
@@ -138,6 +141,73 @@ TEST_CASE("workspace XML round trip keeps the signals, a signal gone from the da
     watch_ingest(q, setup, trace);
     CHECK(q.items[0].sig != nullptr);
     CHECK(q.items[1].sig == nullptr);
+}
+
+TEST_CASE("right-click on a watch row: Copy Value puts the shown value on the clipboard")
+{
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = {1280, 800};
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    theme_load_fonts(15.0f);
+    {
+        App app;
+        add_db(app.setup);
+        const WorkspaceTab& tab = workspace_add_tab(app.workspace);
+        WatchWindow& w = app.watch_windows[tab.uid];
+        w.open = true;
+        add(w, app.setup, "Engine.Speed");
+        engine_frame(app.trace, 0xB0, 0x36, 1);
+        const auto frame = [&]
+        {
+            ImGui::NewFrame();
+            watch_ingest(w, app.setup, app.trace);
+            draw_watch_window(app, tab, w);
+            ImGui::EndFrame();
+        };
+        frame();
+        frame();
+        REQUIRE(w.items[0].has_value);
+        // The row's Selectable is the signal's name under PushID(0) in the "##watch" table of the window.
+        ImGuiWindow* win = nullptr;
+        for (ImGuiWindow* candidate : ImGui::GetCurrentContext()->Windows)
+        {
+            if (std::string_view(candidate->Name).starts_with("Watch") && !candidate->ParentWindow)
+            {
+                win = candidate;
+            }
+        }
+        REQUIRE(win != nullptr);
+        const int row = 0;
+        const ImGuiID table = ImHashStr("##watch", 0, win->ID);
+        const ImGuiID id = ImHashStr("Engine.Speed", 0, ImHashData(&row, sizeof row, table));
+        bool hovered = false;
+        for (float y = win->Pos.y; !hovered && y < win->Pos.y + win->Size.y; y += 3.0f)
+        {
+            io.AddMousePosEvent(win->Pos.x + 40.0f, y);
+            frame();
+            hovered = ImGui::GetCurrentContext()->HoveredId == id;
+        }
+        REQUIRE(hovered);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        frame();
+        frame();
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        REQUIRE(g.OpenPopupStack.Size == 1);
+        REQUIRE(g.OpenPopupStack[0].Window != nullptr);
+        ImGui::SetClipboardText("");
+        ImGui::ActivateItemByID(ImHashStr("Copy Value", 0, g.OpenPopupStack[0].Window->ID));
+        frame();
+        frame();
+        const std::string copied = ImGui::GetClipboardText();
+        CHECK_FALSE(copied.empty());
+        CHECK(copied == can_signal_format(*w.items[0].sig, w.items[0].value)); // 0x36B0 * 0.25 rpm
+    }
+    ImGui::DestroyContext();
 }
 
 TEST_CASE("the window draws headless: values, a value-table name and an unresolved row")

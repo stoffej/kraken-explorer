@@ -1,6 +1,7 @@
 #include "ui/help_overlay.h"
 
 #include <algorithm>
+#include <string>
 
 #include <imgui.h>
 #include <imgui_internal.h> // BeginPopupEx, ImHashStr, FindRenderedTextEnd
@@ -30,6 +31,7 @@ void row(const char* keys, const char* action)
     ImGui::TextUnformatted(keys);
     ImGui::TableNextColumn();
     ImGui::TextUnformatted(action, ImGui::FindRenderedTextEnd(action)); // "Graph View##widget"
+    vim_yank_table_row({{.label = "Key", .text = keys}, {.label = "Action", .text = std::string(action, ImGui::FindRenderedTextEnd(action))}});
 }
 
 bool begin_group(const char* title)
@@ -67,7 +69,7 @@ void command_group(const MainMenu& menu, const char* title, Command first, Comma
             row(keys, command_label(cmd)); // keys is used before the next command_shortcut call
         }
     }
-    ImGui::EndTable();
+    vim_yank_end_table();
 }
 
 } // namespace
@@ -117,7 +119,7 @@ void draw_help_overlay(const MainMenu& menu)
         if (begin_group("Help"))
         {
             row("?", "Show / hide this overlay");
-            ImGui::EndTable();
+            vim_yank_end_table();
         }
         ImGui::TableNextColumn();
         if (begin_group("Navigation (vim)"))
@@ -126,9 +128,9 @@ void draw_help_overlay(const MainMenu& menu)
             {
                 row(k.keys, k.action);
             }
-            ImGui::EndTable();
+            vim_yank_end_table();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     ImGui::EndPopup();
 }

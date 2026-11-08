@@ -10,6 +10,7 @@
 
 #include "app.h"
 #include "ui/raw_tx.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -145,9 +146,13 @@ void draw_requests(App& app, LinControl& lc)
                 }
             }
             ImGui::SetItemTooltip("NAD 0x%02X: %s (double-click to send)", req.nad, format_hex_bytes(req.data).c_str());
+            vim_yank_table_row({{.label = "Request", .text = request_label(app, req)},
+                                {.label = "NAD", .text = std::format("{:02X}", req.nad)},
+                                {.label = "Data", .text = format_hex_bytes(req.data)}},
+                               true);
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     ImGui::SameLine();
     ImGui::BeginGroup();

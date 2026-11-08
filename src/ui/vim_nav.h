@@ -1,5 +1,6 @@
 #pragma once
 
+#include <initializer_list>
 #include <span>
 #include <string>
 #include <vector>
@@ -33,6 +34,8 @@ struct VimNav
     double w_time = -1.0; // time of Ctrl+w waiting for h/j/k/l/w (vim_window_nav), -1 = none
     unsigned w_came_from = 0; // ImGuiID of the window the last Ctrl+w move left, 0 = none
     int yank_menu = 0;    // vim_yank_menu: 1 = open it next call, 2 = open, 0 = closed
+    float yank_x = -1.0f; // vim_yank_menu opened by a right-click: its screen position; < 0 = the window's bottom
+    float yank_y = -1.0f;
 };
 
 // One thing the copy menu offers: its column label and the text that goes to the clipboard.
@@ -56,6 +59,20 @@ bool vim_nav(VimNav& v, int& selected, int count, int page_rows, bool& focus_sea
 // a click outside closes. Set v.yank_menu = 1 with the items ready, then call every frame from
 // the same window; the popup stays until v.yank_menu is 0 again.
 void vim_yank_menu(VimNav& v, std::span<const VimYankItem> items);
+
+// A right-click on the item drawn just before (a table row's Selectable): arms vim_yank_menu at the
+// mouse and returns true, so the caller fills the items for that row. The menu itself is drawn by
+// the window's vim_yank_menu call as after 'y'.
+bool vim_yank_right_click(VimNav& v);
+
+// Copy menu for a table without a VimNav of its own (the editors, dialogs and settings tables):
+// call vim_yank_table_row({{"Column", text}, ...}) once per row, after the row's spanning
+// Selectable with item = true, else at the end of the row (after its last cell: then a right-click
+// counts only while no widget of the row, which has a menu of its own, is hovered). Replace the
+// table's ImGui::EndTable() with vim_yank_end_table(), which draws the menu. "Row" (every column,
+// tab-separated) is added first. ponytail: one shared menu state, only one menu is ever open.
+void vim_yank_table_row(std::initializer_list<VimYankItem> columns, bool item = false);
+void vim_yank_end_table();
 
 struct VimRect
 {

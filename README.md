@@ -4,8 +4,9 @@ _"Deeper than a Peak. Wireshark is stuck in shallow waters."_
 
 Open-source CAN / CAN FD / LIN / NMEA 2000 bus analyzer for Linux, Windows and macOS: live traffic
 and multi-gigabyte logs, DBC / LDF decoding, graphs, replay, UDS diagnostics, Python scripting, a
-REST API and an MCP server so an AI assistant can drive it. Dear ImGui GUI in a deep-sea dark theme,
-GPL-2.0, fork of [CANgaroo](https://github.com/Schildkroet/CANgaroo).
+REST API and an MCP server so an AI assistant can drive it. Every table row and text field has a
+right-click copy menu. Dear ImGui GUI in a deep-sea dark theme, GPL-2.0, fork of
+[CANgaroo](https://github.com/Schildkroet/CANgaroo).
 
 [![Kraken Explorer demo](docs/demo.gif)](docs/demo.mp4)
 
@@ -89,9 +90,9 @@ vcan0, run the tentacle simulator with its DBC and graph Tentacle1 Angle against
 
 ## DTC texts per product
 
-The UDS window shows trouble codes as raw 3-byte codes (`F00016 status 0x2F`). To see what they
-mean, load a **DTC text** file (UDS Diagnostics > DTC > DTC text > Load), one per product, plain
-text, one code per line:
+The UDS window shows trouble codes with their status bits (`P0101-00 status 0x09 testFailed|confirmed`),
+but not what a code means. For that, load a **DTC text** file (UDS Diagnostics > DTC > DTC text > Load),
+one per product, plain text, one code per line:
 
 ```
 # DTC texts for PCU (hex code, then the text; 0x prefix and blank lines are fine)
@@ -105,7 +106,11 @@ C12301 Lost communication with VMM
 ```
 
 Read DTCs then logs `F00016 status 0x2F  Engine oil pressure too low`. The same works for DIDs
-(**DID > DID text**), `F190 VIN` and `0100 Pump pressure (bar)` per line. Build the files by hand, over REST
+(**DID > DID text**), `F190 VIN` and `0100 Pump pressure (bar)` per line. The DTC text file can also
+lay out the ECU's manufacturer-specific records, so **Read DTCs** with **extended** (`19 06`) or
+**snapshot** (`19 04`) shows named values instead of hex: `ext 02 first:time last:time` (types `u8 u16
+u24 u32 time`, optional `*scale` and `+offset`) and `snap F405 coolant_C:u8-40`, one line per record
+or snapshot DID. Without them the records are shown as hex. Build the files by hand, over REST
 (`POST /uds/dtc_file {"path": "dtc_pcu.txt", "product": "PCU", "codes": "F00016 Oil pressure low"}`,
 existing codes are kept) or let the assistant do it through MCP: *"read the DTCs of the PCU and
 write dtc_pcu.txt with a description of each"* (`read_dtcs` + `write_dtc_file`).

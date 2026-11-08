@@ -10,6 +10,7 @@
 #include "drivers/slcan_codec.h"
 #include "ui/lin_control.h"
 #include "ui/theme.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -103,6 +104,7 @@ bool draw_diag_dialog(App& app, DiagDialogState& d, LinDiagRequest& out)
         form_label("Name:");
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##name", "e.g. Read Product ID", &d.name);
+        vim_yank_table_row({{.label = "Name", .text = d.name}});
         form_label("Interface:");
         ImGui::SetNextItemWidth(-FLT_MIN);
         draw_lin_iface_combo("##iface", app, d.iface);
@@ -115,12 +117,14 @@ bool draw_diag_dialog(App& app, DiagDialogState& d, LinDiagRequest& out)
         }
         ImGui::SameLine();
         ImGui::TextDisabled("(%d dec)", d.nad);
+        vim_yank_table_row({{.label = "NAD", .text = std::format("{:02X}", d.nad)}});
         form_label("Data (SID + params):");
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##data", "SID + params (no PCI), e.g. 22 F1 90", &d.data_hex);
         ImGui::SetItemTooltip("Service data bytes starting with the SID (max 6 bytes).\n"
                               "The PCI byte is added automatically - do not include it.");
-        ImGui::EndTable();
+        vim_yank_table_row({{.label = "Data", .text = d.data_hex}});
+        vim_yank_end_table();
     }
     if (!d.error.empty())
     {

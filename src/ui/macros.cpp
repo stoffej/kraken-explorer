@@ -40,6 +40,7 @@
 #include "ui/raw_tx.h"
 #include "ui/script_window.h"
 #include "ui/theme.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -193,9 +194,11 @@ void draw_macro(App& app, Macros& macros, Macro& m)
             {
                 remove = i;
             }
+            vim_yank_table_row({{.label = "#", .text = std::to_string(i + 1)},
+                                {.label = "Step", .text = kind_labels[static_cast<std::size_t>(kind)]}});
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
         if (up != SIZE_MAX)
         {
             std::swap(m.steps[up], m.steps[up - 1]);

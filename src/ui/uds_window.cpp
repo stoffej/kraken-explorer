@@ -228,8 +228,9 @@ void send_request(App& app, UdsWindow& w, std::vector<uint8_t> req)
     }
     const UdsTiming timing = timing_of(w);
     auto dtc_names = w.dtc_names; // snapshot: the worker must not read the map the main thread edits
+    auto defs = w.dtc_defs;
     std::string did = did_note(w.did_names, req);
-    post(app, w, [&app, &w, t = *t, req = std::move(req), timing, dtc_names = std::move(dtc_names), did = std::move(did)]
+    post(app, w, [&app, &w, t = *t, req = std::move(req), timing, dtc_names = std::move(dtc_names), defs = std::move(defs), did = std::move(did)]
     {
         log_line(app, w, std::format("{}  >> {}  {}{}", target_text(t), format_hex_bytes(req), uds_describe_request(req), did));
         const UdsResult r = uds_request(app.uds_client, [&app](const BusMessage& m) { return uds_send(app, m); }, t, req, timing);
@@ -249,6 +250,10 @@ void send_request(App& app, UdsWindow& w, std::vector<uint8_t> req)
             && (r.response[1] == 0x02 || r.response[1] == 0x0A))
         {
             text = dtc_list_named(r.response, dtc_names);
+        }
+        else if (!defs.empty() && r.response.size() >= 6 && r.response[0] == 0x59 && (r.response[1] == 0x04 || r.response[1] == 0x06))
+        {
+            text = uds_dtc_record_text(r.response, defs);
         }
         else
         {
@@ -450,7 +455,7 @@ std::string ascii_of(std::span<const uint8_t> b)
 // Loads a DTC text file: one "code text" per line, code a hex trouble code (F00016, 0xF00016),
 // the rest free text; '#' lines and blanks are skipped. Returns how many codes were read, -1 on
 // a file that could not be opened.
-int load_dtc_file(std::map<uint32_t, std::string>& out, const std::string& path)
+int load_dtc_file(std::map<uint32_t, std::string>& out, const std::string& path, UdsDtcDefs* defs = nullptr)
 {
     std::ifstream in(path);
     if (!in)
@@ -461,6 +466,11 @@ int load_dtc_file(std::map<uint32_t, std::string>& out, const std::string& path)
     text << in.rdbuf();
     out.clear();
     parse_code_lines(text.str(), out);
+    if (defs)
+    {
+        *defs = {};
+        parse_dtc_defs(text.str(), *defs);
+    }
     return static_cast<int>(out.size());
 }
 
@@ -583,16 +593,20 @@ void draw_service_tabs(App& app, UdsWindow& w, bool ok)
         ImGui::SameLine();
         if (ImGui::Button("Load##dtc"))
         {
-            const int n = load_dtc_file(w.dtc_names, w.dtc_file);
+            const int n = load_dtc_file(w.dtc_names, w.dtc_file, &w.dtc_defs);
             log_line(app, w, n < 0 ? std::format("DTC file: cannot open {}", w.dtc_file)
-                                   : std::format("DTC file: loaded {} code(s) from {}", n, w.dtc_file));
+                                   : std::format("DTC file: loaded {} code(s), {} extended data record layout(s), {} snapshot DID(s) from {}",
+                                                 n, w.dtc_defs.ext.size(), w.dtc_defs.snap.size(), w.dtc_file));
         }
         ImGui::SetItemTooltip("One \"<hex code> <text>\" per line, e.g. \"F00016 Oil pressure low\".\n"
-                              "# lines are comments. Read DTCs then shows each code's text.");
-        if (!w.dtc_names.empty())
+                              "# lines are comments. Read DTCs then shows each code's text.\n"
+                              "\"ext <record> <name>:<type> ...\" lines (types u8 u16 u24 u32 time, optional *scale +offset)\n"
+                              "describe the extended data records (19 06), e.g. \"ext 02 first:time last:time\";\n"
+                              "\"snap <DID> <name>:<type>\" lines the DIDs of the snapshot records (19 04).");
+        if (!w.dtc_names.empty() || !w.dtc_defs.empty())
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("%zu codes", w.dtc_names.size());
+            ImGui::TextDisabled("%zu codes, %zu ext, %zu snap", w.dtc_names.size(), w.dtc_defs.ext.size(), w.dtc_defs.snap.size());
         }
         end_section();
     }
@@ -970,6 +984,16 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
             {
                 w.ecu = static_cast<int>(i);
             }
+            if (vim_yank_right_click(w.vim)) // the row's cells to the copy menu
+            {
+                const std::string target = target_text({.tx_id = e.tx_id, .rx_id = e.rx_id, .extended = e.extended});
+                const std::string iface = e.iface < app.ifaces.size() ? app.ifaces[e.iface].info.name : std::to_string(e.iface);
+                w.yank_items = {{.label = "Row", .text = std::format("{}\t{}\t{}\t{}", iface, target, e.name, e.services)},
+                                {.label = "Interface", .text = iface},
+                                {.label = "Request -> Response", .text = target},
+                                {.label = "Name", .text = e.name},
+                                {.label = "Services", .text = e.services}};
+            }
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-FLT_MIN);
             ImGui::InputText("##name", &e.name);
@@ -987,6 +1011,7 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
             ImGui::PopID();
         }
         ImGui::EndTable();
+        vim_yank_menu(w.vim, w.yank_items);
     }
 }
 

@@ -15,6 +15,7 @@
 #include "app.h"
 #include "core/log.h"
 #include "ui/theme.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -274,9 +275,12 @@ void draw_conditions(const App& app, ConditionalLogging& cl, const std::vector<S
             {
                 cl.selected_condition = i;
             }
+            vim_yank_table_row({{.label = "Signal", .text = preview},
+                                {.label = "Operator", .text = op_names[op]},
+                                {.label = "Threshold", .text = std::format("{:g}", cond.threshold)}});
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     if (ImGui::Button("Add Condition"))
     {

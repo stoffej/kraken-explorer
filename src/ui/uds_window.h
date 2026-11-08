@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "decoders/uds_client.h"
+#include "ui/vim_nav.h"
 
 struct App;
 struct WorkspaceTab;
@@ -70,6 +71,9 @@ struct UdsWindow
     std::string dtc_code = "000000";
     std::map<uint32_t, std::string> dtc_names; // 3-byte trouble code -> text, loaded from a file
     std::string dtc_file;        // path of the loaded DTC text file (for the status line)
+    UdsDtcDefs dtc_defs;         // "ext" / "snap" lines of that file: 0x19 0x06 / 0x04 record layouts
+    VimNav vim;                  // right-click on an ECU row of the Scan tab: the copy menu at the mouse
+    std::vector<VimYankItem> yank_items;
     std::map<uint32_t, std::string> did_names; // DID -> name, loaded from a per-product file (same format)
     std::string did_file;
     std::string sec_level = "01";

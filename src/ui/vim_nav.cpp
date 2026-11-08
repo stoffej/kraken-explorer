@@ -228,11 +228,19 @@ void vim_yank_menu(VimNav& v, std::span<const VimYankItem> items)
     {
         return;
     }
-    const ImVec2 pos = ImGui::GetWindowPos();
-    ImGui::SetNextWindowPos(ImVec2(pos.x, pos.y + ImGui::GetWindowSize().y), ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
+    if (v.yank_x >= 0.0f) // a right-click: the menu opens at the mouse, like a context menu
+    {
+        ImGui::SetNextWindowPos(ImVec2(v.yank_x, v.yank_y), ImGuiCond_Appearing);
+    }
+    else
+    {
+        const ImVec2 pos = ImGui::GetWindowPos();
+        ImGui::SetNextWindowPos(ImVec2(pos.x, pos.y + ImGui::GetWindowSize().y), ImGuiCond_Appearing, ImVec2(0.0f, 1.0f));
+    }
     if (!ImGui::BeginPopup("##yank")) // Esc / click outside closed it
     {
         v.yank_menu = 0;
+        v.yank_x = v.yank_y = -1.0f;
         return;
     }
     const std::string keys = yank_keys(items);
@@ -275,8 +283,69 @@ void vim_yank_menu(VimNav& v, std::span<const VimYankItem> items)
         ImGui::GetIO().InputQueueCharacters.resize(0); // the letter was the menu's, not the list's
         ImGui::CloseCurrentPopup();
         v.yank_menu = 0;
+        v.yank_x = v.yank_y = -1.0f;
     }
     ImGui::EndPopup();
+}
+
+bool vim_yank_right_click(VimNav& v)
+{
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) || !ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+    {
+        return false;
+    }
+    const ImVec2 m = ImGui::GetMousePos();
+    v.yank_x = m.x;
+    v.yank_y = m.y;
+    v.yank_menu = 1;
+    return true;
+}
+
+namespace
+{
+VimNav g_table_nav; // vim_yank_table_row / vim_yank_end_table: the shared menu of tables without their own
+std::vector<VimYankItem> g_table_items;
+ImGuiID g_table_id = 0; // the table whose row armed it: only its vim_yank_end_table draws the menu (several
+                        // tables share one window, and a BeginPopup elsewhere would close it)
+} // namespace
+
+void vim_yank_table_row(std::initializer_list<VimYankItem> columns, bool item)
+{
+    bool hit = false;
+    if (item)
+    {
+        hit = vim_yank_right_click(g_table_nav);
+    }
+    else if (ImGui::TableGetHoveredRow() == ImGui::TableGetRowIndex() && ImGui::IsMouseReleased(ImGuiMouseButton_Right)
+             && ImGui::GetCurrentContext()->HoveredId == 0 && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId))
+    {
+        const ImVec2 m = ImGui::GetMousePos();
+        g_table_nav.yank_x = m.x;
+        g_table_nav.yank_y = m.y;
+        g_table_nav.yank_menu = 1;
+        hit = true;
+    }
+    if (!hit)
+    {
+        return;
+    }
+    g_table_id = ImGui::GetCurrentTable()->ID;
+    g_table_items.assign({{.label = "Row"}});
+    for (const VimYankItem& c : columns)
+    {
+        g_table_items[0].text += (g_table_items.size() > 1 ? "\t" : "") + c.text;
+        g_table_items.push_back(c);
+    }
+}
+
+void vim_yank_end_table()
+{
+    const ImGuiID table = ImGui::GetCurrentTable()->ID;
+    ImGui::EndTable();
+    if (table == g_table_id)
+    {
+        vim_yank_menu(g_table_nav, g_table_items);
+    }
 }
 
 void vim_window_nav(VimNav& v, unsigned tab_uid)

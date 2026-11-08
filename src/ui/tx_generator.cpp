@@ -26,6 +26,7 @@
 #include "ui/icons.h"
 #include "ui/raw_tx.h"
 #include "ui/theme.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -294,9 +295,12 @@ void draw_row_details(App& app, TxGenerator& gen, TxCyclic& row)
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(sig.unit.c_str());
+            vim_yank_table_row({{.label = "Signal", .text = sig.name},
+                                {.label = "Value", .text = can_signal_format(sig, can_signal_extract_physical(sig, row.msg))},
+                                {.label = "Unit", .text = sig.unit}});
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
 }
 
@@ -445,6 +449,7 @@ void draw_available(App& app, TxGenerator& gen)
                             add = m;
                         }
                     }
+                    vim_yank_table_row({{.label = "ID", .text = id}, {.label = "Name", .text = m->name}}, true);
                     if (moved && m == gen.layout_msg)
                     {
                         ImGui::SetScrollHereY();
@@ -453,7 +458,7 @@ void draw_available(App& app, TxGenerator& gen)
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(m->name.c_str());
                 }
-                ImGui::EndTable();
+                vim_yank_end_table();
                 if (add != nullptr)
                 {
                     gen.rows.push_back(row_from_db(gen, *add));
@@ -628,6 +633,13 @@ void draw_active(App& app, TxGenerator& gen, bool root_focused)
                     open_edit = true;
                 }
             }
+            vim_yank_table_row({{.label = "ID", .text = id},
+                                {.label = "Name", .text = row.name},
+                                {.label = "Interface", .text = row.msg.iface < app.ifaces.size() ? app.ifaces[row.msg.iface].info.name : "Unknown"},
+                                {.label = "DLC", .text = std::to_string(row.msg.len)},
+                                {.label = "Trigger", .text = trigger_names[static_cast<int>(row.trigger)]},
+                                {.label = "Interval (ms)", .text = std::to_string(row.interval_ms)}},
+                               true);
             if (moved && static_cast<int>(i) == gen.current)
             {
                 ImGui::SetScrollHereY();
@@ -704,7 +716,7 @@ void draw_active(App& app, TxGenerator& gen, bool root_focused)
             }
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
 
     // Edit dialog (double-click on a row): the Message View editor on a copy, OK applies it.

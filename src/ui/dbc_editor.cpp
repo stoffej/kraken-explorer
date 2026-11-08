@@ -19,6 +19,7 @@
 #include "db/dbc/dbc_check.h"
 #include "db/dbc/dbc_writer.h"
 #include "ui/workspace_tabs.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -342,6 +343,7 @@ void draw_signal_form(DbcEditorState& s, CanDbMessage& m, int index)
                 has_remove = true;
                 remove_value = value;
             }
+            vim_yank_table_row({{.label = "Value", .text = std::format("{}", value)}, {.label = "Name", .text = name}});
             ImGui::PopID();
         }
         ImGui::TableNextRow();
@@ -359,7 +361,7 @@ void draw_signal_form(DbcEditorState& s, CanDbMessage& m, int index)
             ++s.vt_value;
             changed = true;
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
         if (has_remove)
         {
             sig.value_table.erase(remove_value);

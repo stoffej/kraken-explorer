@@ -28,6 +28,7 @@
 #include "ui/icons.h"
 #include "ui/theme.h"
 #include "ui/status_bar.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -1355,6 +1356,7 @@ void draw_filter_table(App& app, Replay& r)
                 }
                 ImGui::Unindent();
                 ImGui::TableNextColumn();
+                std::string db_name;
                 if (row.id != replay_error_id && !lin)
                 {
                     // Looked up in the DBC of the mapped interface's network (trace only: any network).
@@ -1363,6 +1365,7 @@ void draw_filter_table(App& app, Replay& r)
                                            .iface = static_cast<uint16_t>(target >= 0 ? target : UINT16_MAX)};
                     if (const CanDbMessage* db = setup_find_can_message(app.setup, probe))
                     {
+                        db_name = db->name;
                         ImGui::TextUnformatted(db->name.c_str());
                     }
                 }
@@ -1381,13 +1384,16 @@ void draw_filter_table(App& app, Replay& r)
                 ImGui::SetItemTooltip("Breakpoint: pause the replay before every frame with this id");
                 ImGui::TableNextColumn();
                 ImGui::Text("%d", row.count);
+                vim_yank_table_row({{.label = "ID", .text = row.id == replay_error_id ? std::string("ERROR") : std::format("0x{:X}", row.id)},
+                                    {.label = "Name", .text = db_name},
+                                    {.label = "Count", .text = std::to_string(row.count)}});
                 ImGui::PopID();
             }
             ImGui::TreePop();
         }
         ImGui::PopID();
     }
-    ImGui::EndTable();
+    vim_yank_end_table();
 }
 
 } // namespace

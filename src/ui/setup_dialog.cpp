@@ -12,6 +12,7 @@
 #include "db/sym/sym_parser.h"
 #include "drivers/driver.h"
 #include "ui/theme.h"
+#include "ui/vim_nav.h"
 
 #ifdef __linux__
 #include <unistd.h>
@@ -354,13 +355,16 @@ void draw_add_interfaces_popup(App& app, SetupDialogState& s, SetupNetwork& net)
             {
                 s.add_checked[k] = s.add_checked[k] ? 0 : 1;
             }
+            vim_yank_table_row({{.label = "Device", .text = f.info.name}, {.label = "Driver", .text = f.ops->name},
+                                {.label = "Description", .text = f.info.details}},
+                               true);
             ImGui::PopID();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(f.ops->name);
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(f.info.details.c_str());
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     const bool ok = ImGui::Button("OK", ImVec2(ImGui::GetFontSize() * 6, 0));
     ImGui::SameLine();
@@ -402,6 +406,9 @@ void draw_interfaces_page(App& app, SetupDialogState& s, SetupNetwork& net)
             {
                 s.row = i;
             }
+            vim_yank_table_row({{.label = "Device", .text = intf.name}, {.label = "Driver", .text = intf.driver},
+                                {.label = "Bitrate", .text = std::to_string(intf.bus_type == BusType::LIN ? intf.lin_baudrate : intf.bitrate)}},
+                               true);
             ImGui::PopID();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(intf.driver.c_str());
@@ -413,7 +420,7 @@ void draw_interfaces_page(App& app, SetupDialogState& s, SetupNetwork& net)
                 draw_link_buttons(app, app.ifaces[static_cast<std::size_t>(idx)]);
             }
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     if (ImGui::Button("Add Interface...") || s.add_request)
     {
@@ -459,11 +466,12 @@ void draw_databases_page(App& app, SetupDialogState& s, SetupNetwork& net)
             {
                 s.row = i;
             }
+            vim_yank_table_row({{.label = "Filename", .text = file_name(path)}, {.label = "Path", .text = path}}, true);
             ImGui::PopID();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(directory(path).c_str());
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     if (ImGui::Button("Add Database..."))
     {
@@ -1080,8 +1088,12 @@ void draw_lin_frame_defaults(const LinDb& db, SetupInterface& intf, LinFrameDefa
                 ImGui::Text("%.3f", lin_signal_raw_to_physical(sig, lin_signal_extract_raw(sig, data)));
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(sig.unit.c_str());
+                vim_yank_table_row({{.label = "Signal", .text = sig.name},
+                                    {.label = "Raw Value", .text = std::to_string(lin_signal_extract_raw(sig, data))},
+                                    {.label = "Physical", .text = std::format("{:.3f}", lin_signal_raw_to_physical(sig, lin_signal_extract_raw(sig, data)))},
+                                    {.label = "Unit", .text = sig.unit}});
             }
-            ImGui::EndTable();
+            vim_yank_end_table();
         }
         if (ImGui::Button("Reset Values"))
         {

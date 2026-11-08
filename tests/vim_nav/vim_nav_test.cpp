@@ -187,6 +187,155 @@ TEST_CASE("copy menu: y copies the whole row, the column's letter copies that co
     CHECK(std::string_view(ImGui::GetClipboardText()) == "1\t2\t3");
 }
 
+TEST_CASE("copy menu opened by a right-click appears at the mouse, and forgets the spot when it closes")
+{
+    const UiTest ui;
+    VimNav v;
+    const std::vector<VimYankItem> items = {{"Row", "1\t2"}, {"Time", "1"}, {"Data", "2"}};
+    const auto draw = [&]
+    {
+        ImGui::NewFrame();
+        ImGui::Begin("List");
+        vim_yank_menu(v, items);
+        ImGui::End();
+        ImGui::EndFrame();
+    };
+    draw();
+    v.yank_x = 321.0f;
+    v.yank_y = 123.0f;
+    v.yank_menu = 1;
+    draw();
+    draw();
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    REQUIRE(g.OpenPopupStack.Size == 1);
+    REQUIRE(g.OpenPopupStack[0].Window != nullptr);
+    CHECK(g.OpenPopupStack[0].Window->Pos.x == doctest::Approx(321.0f));
+    CHECK(g.OpenPopupStack[0].Window->Pos.y == doctest::Approx(123.0f));
+    ImGui::GetIO().AddInputCharacter('d');
+    draw();
+    CHECK(std::string_view(ImGui::GetClipboardText()) == "2");
+    CHECK(v.yank_menu == 0);
+    CHECK(v.yank_x < 0.0f); // the next 'y' menu sits at the window's bottom again
+}
+
+TEST_CASE("a right-click on a row arms the copy menu at the mouse; a left-click or a miss does not")
+{
+    const UiTest ui;
+    VimNav v;
+    ImGuiIO& io = ImGui::GetIO();
+    bool armed = false;
+    const auto draw = [&]
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({300, 200});
+        ImGui::Begin("List");
+        ImGui::Selectable("row", false);
+        armed = vim_yank_right_click(v);
+        ImGui::End();
+        ImGui::EndFrame();
+    };
+    draw();
+    const ImGuiWindow* w = ImGui::FindWindowByName("List");
+    REQUIRE(w != nullptr);
+    const ImVec2 at(w->Pos.x + 40.0f, w->Pos.y + ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y + 4.0f);
+    io.AddMousePosEvent(at.x, at.y);
+    draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    draw();
+    CHECK_FALSE(armed);
+    CHECK(v.yank_menu == 0);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    draw();
+    CHECK(armed);
+    CHECK(v.yank_menu == 1);
+    CHECK(v.yank_x == doctest::Approx(at.x));
+    CHECK(v.yank_y == doctest::Approx(at.y));
+    // Off the row: nothing.
+    v = VimNav{};
+    io.AddMousePosEvent(at.x, at.y + 120.0f);
+    draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    draw();
+    CHECK_FALSE(armed);
+    CHECK(v.yank_menu == 0);
+}
+
+TEST_CASE("shared table copy menu: a right-click on a plain row, or after its Selectable, copies its columns")
+{
+    const UiTest ui;
+    ImGuiIO& io = ImGui::GetIO();
+    const auto draw = [&]
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({400, 300});
+        ImGui::Begin("Table");
+        if (ImGui::BeginTable("##other", 1)) // a second table in the window must not close the menu
+        {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("other");
+            vim_yank_table_row({{.label = "O", .text = "o"}});
+            vim_yank_end_table();
+        }
+        if (ImGui::BeginTable("##t", 2))
+        {
+            ImGui::TableNextRow(); // plain text cells: the row-end variant
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("a1");
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("b1");
+            vim_yank_table_row({{.label = "A", .text = "a1"}, {.label = "B", .text = "b1"}});
+            ImGui::TableNextRow(); // a spanning Selectable: the item variant
+            ImGui::TableNextColumn();
+            ImGui::Selectable("a2", false, ImGuiSelectableFlags_SpanAllColumns);
+            vim_yank_table_row({{.label = "A", .text = "a2"}, {.label = "B", .text = "b2"}}, true);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("b2");
+            vim_yank_end_table();
+        }
+        ImGui::End();
+        ImGui::EndFrame();
+    };
+    draw();
+    const ImGuiWindow* w = ImGui::FindWindowByName("Table");
+    REQUIRE(w != nullptr);
+    // Sweep down the window right-clicking: every menu that opens gets `keys[n]`, and what lands on
+    // the clipboard is collected. Three rows (other, a1, a2) stack from the top.
+    const char keys[] = {'y', 'y', 'b'};
+    std::vector<std::string> got;
+    for (float y = w->Pos.y + 2.0f; y < w->Pos.y + w->Size.y && got.size() < 3; y += 3.0f)
+    {
+        io.AddMousePosEvent(w->Pos.x + 30.0f, y);
+        draw();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        draw();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        draw();
+        draw();
+        if (ImGui::GetCurrentContext()->OpenPopupStack.Size == 1)
+        {
+            ImGui::SetClipboardText("");
+            io.AddInputCharacter(static_cast<unsigned>(keys[got.size()]));
+            draw();
+            CHECK(ImGui::GetCurrentContext()->OpenPopupStack.Size == 0);
+            got.emplace_back(ImGui::GetClipboardText());
+            y += ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().CellPadding.y; // on to the next row
+        }
+    }
+    REQUIRE(got.size() == 3);
+    CHECK(got[0] == "o");
+    CHECK(got[1] == "a1\tb1");
+    CHECK(got[2] == "b2");
+}
+
 TEST_CASE("pick window: 2x2 grid")
 {
     // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right

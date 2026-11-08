@@ -543,6 +543,56 @@ TEST_CASE("y copies the selected row's cells to the clipboard, tab-separated")
     }
 }
 
+TEST_CASE("a right-click on a row selects it and opens the copy menu at the mouse")
+{
+    const UiTest ui;
+    {
+        App app;
+        TraceWindowState s;
+        const WorkspaceTab tab{.title = "Trace", .uid = 1};
+        const BusMessage msgs[] = {frame(0x100, {1}, 0, 1), frame(0x200, {0xAB, 0xCD}, 0, 2), frame(0x300, {7}, 0, 3)};
+        trace_append(app.trace, msgs);
+        draw_frame(app, s, tab, 1000.0f, true);
+        draw_frame(app, s, tab);
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetClipboardText("");
+
+        // Sweep down the window, right-clicking, until the 0x200 row (row 1) is the one selected.
+        float y = 20.0f;
+        for (; y < 600.0f && s.selected != 1; y += 4.0f)
+        {
+            io.AddMousePosEvent(300.0f, y);
+            draw_frame(app, s, tab);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            draw_frame(app, s, tab);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+            draw_frame(app, s, tab);
+        }
+        REQUIRE(s.selected == 1);
+        for (int i = 0; i < 4 && s.vim.yank_menu != 2; ++i)
+        {
+            draw_frame(app, s, tab); // the row is captured when drawn, then the menu opens
+        }
+        CHECK_FALSE(s.yank_pending);
+        REQUIRE(s.vim.yank_menu == 2);
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        REQUIRE(g.OpenPopupStack.Size == 1);
+        REQUIRE(g.OpenPopupStack[0].Window != nullptr);
+        CHECK(g.OpenPopupStack[0].Window->Pos.x == doctest::Approx(300.0f));
+        CHECK(g.OpenPopupStack[0].Window->Pos.y == doctest::Approx(y - 4.0f));
+        REQUIRE(s.yank_items.size() > 1); // the whole row, then one item per column
+
+        io.AddInputCharacter('y'); // the whole row
+        draw_frame(app, s, tab);
+        const std::string line = ImGui::GetClipboardText();
+        CHECK(line.find("0x200") != std::string::npos);
+        CHECK(line.find("AB CD") != std::string::npos);
+        CHECK(line.find("0x100") == std::string::npos);
+        CHECK(s.vim.yank_menu == 0);
+        CHECK(s.vim.yank_x < 0.0f);
+    }
+}
+
 TEST_CASE("Filter text matches the ID as shown: decimal in Dec mode")
 {
     App app;

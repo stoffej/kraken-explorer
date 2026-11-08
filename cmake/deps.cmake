@@ -39,7 +39,7 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
+    ${CMAKE_SOURCE_DIR}/src/imgui_stdlib.cpp # the std::string overloads, with a right-click Cut / Copy / Paste menu
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(imgui SYSTEM PUBLIC

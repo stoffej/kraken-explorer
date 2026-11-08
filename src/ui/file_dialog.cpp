@@ -421,6 +421,11 @@ void draw_list(FileDialog& d, float height, std::optional<fs::path>& go, bool& a
                     }
                 }
             }
+            vim_yank_table_row({{.label = "Name", .text = e.name},
+                                {.label = "Path", .text = (d.dir / e.name).string()},
+                                {.label = "Size", .text = e.is_dir ? std::string() : size_text(e.size)},
+                                {.label = "Modified", .text = time_text(e.modified)}},
+                               true);
             ImGui::PopID();
             ImGui::TableNextColumn();
             if (!e.is_dir)
@@ -437,7 +442,7 @@ void draw_list(FileDialog& d, float height, std::optional<fs::path>& go, bool& a
         ImGui::TableNextColumn();
         ImGui::TextDisabled(d.unreadable ? "Cannot read folder" : "Empty folder"); // error may be a validation message
     }
-    ImGui::EndTable();
+    vim_yank_end_table();
 }
 
 } // namespace

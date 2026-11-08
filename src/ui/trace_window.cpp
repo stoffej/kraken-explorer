@@ -1135,6 +1135,16 @@ void child_row()
 // Highlights row r when selected and scrolls to it after a move. Call after its first cell.
 void nav_row(Ctx& c, int r)
 {
+    // A right-click on the row selects it and opens the copy menu at the mouse: the row's cells
+    // are captured when it is drawn next frame, as after 'y'.
+    if (ImGui::TableGetHoveredRow() == ImGui::TableGetRowIndex() && ImGui::IsMouseReleased(ImGuiMouseButton_Right)
+        && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId))
+    {
+        c.s.selected = r;
+        c.s.yank_pending = true;
+        c.s.vim.yank_x = ImGui::GetMousePos().x;
+        c.s.vim.yank_y = ImGui::GetMousePos().y;
+    }
     if (r != c.s.selected)
     {
         return;
@@ -1217,8 +1227,8 @@ void append_signals(std::string& b, const App& app, const BusMessage& m)
     }
 }
 
-// Right-click on a signal row of the Monitor: plot the signal in one of the tab's graphs.
-void signal_context_menu(Ctx& c, const CanDbMessage& d, const CanDbSignal& sig)
+// Right-click on a signal row of the Monitor: copy its value / name, plot it in one of the tab's graphs.
+void signal_context_menu(Ctx& c, const BusMessage& m, const CanDbMessage& d, const CanDbSignal& sig)
 {
     ImGui::PushID(&sig);
     if (ImGui::TableGetHoveredRow() == ImGui::TableGetRowIndex() && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
@@ -1246,8 +1256,26 @@ void signal_context_menu(Ctx& c, const CanDbMessage& d, const CanDbSignal& sig)
                             .can_msg = &d, .can_sig = &sig};
         ImGui::TextDisabled("%s", e.label.c_str());
         ImGui::Separator();
+        std::string value;
+        if (can_signal_present(d, sig, m))
+        {
+            trace_append_signal_value(value, sig, can_signal_extract_raw(sig, m));
+        }
+        if (ImGui::MenuItem("Copy Value"))
+        {
+            ImGui::SetClipboardText(value.c_str());
+        }
+        if (ImGui::MenuItem("Copy Name"))
+        {
+            ImGui::SetClipboardText(sig.name.c_str());
+        }
+        if (ImGui::MenuItem("Copy Name=Value"))
+        {
+            ImGui::SetClipboardText((sig.name + '=' + value).c_str());
+        }
         if (tab != nullptr && network)
         {
+            ImGui::Separator();
             for (GraphState& g : tab->graphs)
             {
                 const std::string title = g.id == 0 ? std::string("Add to Graph") : std::format("Add to Graph {}", g.id);
@@ -1320,7 +1348,7 @@ void signal_rows(Ctx& c, const BusMessage& m, float alpha)
         {
             ImGui::PopStyleColor();
         }
-        signal_context_menu(c, *d, sig);
+        signal_context_menu(c, m, *d, sig);
     }
 }
 

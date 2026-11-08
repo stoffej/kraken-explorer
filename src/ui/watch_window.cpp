@@ -229,6 +229,24 @@ void draw_watch_window(App& app, const WorkspaceTab& tab, WatchWindow& w)
                 ImGui::EndDisabled();
                 if (ImGui::BeginPopupContextItem("##row"))
                 {
+                    const std::string value = item.sig != nullptr && item.has_value ? value_text(item) : std::string();
+                    if (ImGui::MenuItem("Copy Value", nullptr, false, !value.empty()))
+                    {
+                        ImGui::SetClipboardText(value.c_str());
+                    }
+                    if (ImGui::MenuItem("Copy Name=Value", nullptr, false, !value.empty()))
+                    {
+                        ImGui::SetClipboardText((name + '=' + value).c_str());
+                    }
+                    if (ImGui::MenuItem("Copy Row", nullptr, false, !value.empty()))
+                    {
+                        std::string count;
+                        append_grouped(count, item.count);
+                        ImGui::SetClipboardText(std::format("{}\t{}\t{}\t{}\t{}\t{}", name, value, item.sig->unit,
+                                                            can_signal_format(*item.sig, item.min),
+                                                            can_signal_format(*item.sig, item.max), count).c_str());
+                    }
+                    ImGui::Separator();
                     if (ImGui::MenuItem("Remove"))
                     {
                         remove = i;

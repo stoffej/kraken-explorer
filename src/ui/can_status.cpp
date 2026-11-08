@@ -741,15 +741,14 @@ void draw_can_status(App& app, CanStatusState& s, const WorkspaceTab& tab)
                 toggle_link(app, iface);
             }
         }
-        if (cur >= 0 && vim_yank())
+        // The copy menu's items for the interface at `index`: the whole row, then one per column.
+        const auto yank_items_of = [&](uint16_t index)
         {
-            const uint16_t index = s.order[static_cast<std::size_t>(cur)];
             const Iface& iface = app.ifaces[index];
-            std::vector<VimYankItem>& items = s.yank_items;
-            items.assign({{.label = "Row"},
-                          {.label = "Driver", .text = iface.ops ? iface.ops->name : ""},
-                          {.label = "Interface", .text = iface.info.name},
-                          {.label = "Bitrate", .text = index < s.bitrate.size() ? s.bitrate[index] : no_bitrate}});
+            std::vector<VimYankItem> items = {{.label = "Row"},
+                                              {.label = "Driver", .text = iface.ops ? iface.ops->name : ""},
+                                              {.label = "Interface", .text = iface.info.name},
+                                              {.label = "Bitrate", .text = index < s.bitrate.size() ? s.bitrate[index] : no_bitrate}};
             if (index < s.rows.size() && s.rows[index].seen)
             {
                 const CanStatusRow& row = s.rows[index];
@@ -770,6 +769,11 @@ void draw_can_status(App& app, CanStatusState& s, const WorkspaceTab& tab)
             {
                 items[0].text += (i > 1 ? "\t" : "") + items[i].text;
             }
+            return items;
+        };
+        if (cur >= 0 && vim_yank())
+        {
+            s.yank_items = yank_items_of(s.order[static_cast<std::size_t>(cur)]);
             s.vim.yank_menu = 1;
         }
         vim_yank_menu(s.vim, s.yank_items);
@@ -791,6 +795,11 @@ void draw_can_status(App& app, CanStatusState& s, const WorkspaceTab& tab)
                                   ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
             {
                 s.selected = index;
+            }
+            if (vim_yank_right_click(s.vim)) // right-click: the copy menu at the mouse, as 'y'
+            {
+                s.selected = index;
+                s.yank_items = yank_items_of(index);
             }
             if (moved && s.selected == index)
             {

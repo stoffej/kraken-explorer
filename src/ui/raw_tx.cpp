@@ -10,6 +10,7 @@
 #include "app.h"
 #include "db/model/can_db.h"
 #include "ui/tx_generator.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -196,9 +197,12 @@ bool draw_raw_tx(App& app, BusMessage& msg, const CanDbMessage* db)
                 }
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(sig.unit.c_str());
+                vim_yank_table_row({{.label = "Signal", .text = sig.name},
+                                    {.label = "Value", .text = can_signal_format(sig, can_signal_extract_physical(sig, msg))},
+                                    {.label = "Unit", .text = sig.unit}});
                 ImGui::PopID();
             }
-            ImGui::EndTable();
+            vim_yank_end_table();
         }
     }
     return changed;

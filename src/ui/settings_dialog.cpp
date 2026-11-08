@@ -11,6 +11,7 @@
 #include <imgui_internal.h> // MarkIniSettingsDirty
 
 #include "app.h"
+#include "ui/vim_nav.h"
 
 namespace
 {
@@ -126,13 +127,15 @@ void draw_settings_dialog(App& app, SettingsDialogState& s)
             ImGui::TableNextColumn();
             ImGui::PushID(i);
             const std::string name = s.capture == i ? "Press keys..." : chord_name(command_chord(app.menu, cmd));
+            vim_yank_table_row({{.label = "Command", .text = std::string(label.substr(0, std::min(label.find("##"), label.size())))},
+                                {.label = "Shortcut", .text = name}});
             if (ImGui::Button(name.c_str(), ImVec2(-FLT_MIN, 0.0f)))
             {
                 s.capture = s.capture == i ? -1 : i;
             }
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        vim_yank_end_table();
     }
     ImGui::EndChild();
     if (ImGui::Button("Reset shortcuts"))
