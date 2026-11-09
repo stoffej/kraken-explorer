@@ -69,7 +69,10 @@ struct FileDialog
     bool visible = false;      // between open and OK/Cancel
     bool open_request = false; // OpenPopup on the next draw
     std::filesystem::path dir;
-    std::string location;      // editable path field
+    std::string location;      // the address bar's text while it is being edited
+    bool edit_location = false;  // address bar shows a text field instead of the breadcrumbs
+    bool focus_location = false; // Ctrl+L: activate that field in this frame (it is drawn after the request)
+    float address_rest[4] = {};  // last frame's empty end of the breadcrumb row (min x, y, max x, y)
     std::string file_name;     // name field (Save, or typed name for Open)
     std::vector<FileEntry> entries;
     std::vector<std::string> selected; // names in dir
@@ -80,7 +83,6 @@ struct FileDialog
     bool ascending = true;
     bool show_hidden = false;
     VimNav vim;              // j/k/gg/G/Ctrl+d.. in the list, h = up, l = into dir, Enter = open
-    bool focus_name = false; // '/': keyboard focus to the name (or folder path) field next frame
 };
 
 // start_path: a directory, a file (its directory, and its name for Save) or a bare name

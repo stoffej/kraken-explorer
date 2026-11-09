@@ -9,7 +9,7 @@
 #include <ranges>
 
 #include <imgui.h>
-#include <imgui_internal.h> // SetKeyOwner
+#include <imgui_internal.h> // SetKeyOwner, NavActivateId
 #include <misc/cpp/imgui_stdlib.h>
 
 #include "core/local_time.h"
@@ -155,6 +155,31 @@ bool visible_entry(const FileDialog& d, const FileEntry& e)
     return d.mode != FileDialogMode::SelectFolder && file_filter_match(current_patterns(d), e.name);
 }
 
+// A pasted path as other programs hand it over: "C:\\x y" with quotes (Explorer's Copy as path),
+// a trailing newline from a terminal.
+std::string clean_path(std::string_view text)
+{
+    text = trim(text);
+    while (!text.empty() && (text.front() == '"' || text.front() == '\''))
+    {
+        text.remove_prefix(1);
+    }
+    while (!text.empty() && (text.back() == '"' || text.back() == '\''))
+    {
+        text.remove_suffix(1);
+    }
+    text = trim(text);
+    if (text == "~") // GTK and macOS: ~ is the home folder
+    {
+        return home_dir().string();
+    }
+    if (text.starts_with("~/"))
+    {
+        return (home_dir() / std::string(text.substr(2))).string();
+    }
+    return std::string(text);
+}
+
 // OK / Enter / double click. Returns the chosen paths, or navigates / reports an error.
 std::vector<std::string> accept(FileDialog& d)
 {
@@ -164,6 +189,7 @@ std::vector<std::string> accept(FileDialog& d)
         const bool dir_selected = d.selected.size() == 1 && is_dir(full(d.selected.front()));
         return {dir_selected ? full(d.selected.front()).string() : d.dir.string()};
     }
+    d.file_name = clean_path(d.file_name); // a full path pasted into Name, as Explorer and GTK take it
     if (d.selected.size() == 1 && is_dir(full(d.selected.front())))
     {
         navigate(d, full(d.selected.front()));
@@ -175,13 +201,13 @@ std::vector<std::string> accept(FileDialog& d)
         {
             return {};
         }
-        const fs::path p = file_dialog_save_path(d.dir, d.file_name, current_patterns(d)).lexically_normal();
-        std::error_code ec;
-        if (is_dir(p))
+        if (const fs::path typed = full(d.file_name); is_dir(typed)) // a folder, before the type's extension is added
         {
-            navigate(d, p);
+            navigate(d, typed);
             return {};
         }
+        const fs::path p = file_dialog_save_path(d.dir, d.file_name, current_patterns(d)).lexically_normal();
+        std::error_code ec;
         if (!is_dir(p.parent_path()))
         {
             d.error = std::format("Folder {} does not exist", p.parent_path().string());
@@ -267,7 +293,49 @@ void draw_places(FileDialog& d, std::optional<fs::path>& go)
     }
 }
 
-void draw_breadcrumbs(FileDialog& d, std::optional<fs::path>& go)
+// Enter in the address bar: a folder is entered, a file (not when choosing a folder) is chosen
+// at once, as in Explorer and the GTK chooser.
+void go_location(FileDialog& d, std::optional<fs::path>& go, bool& accept_now)
+{
+    fs::path p = clean_path(d.location);
+    if (p.empty()) // cleared and entered: back to the shown folder
+    {
+        d.location = d.dir.string();
+        d.error.clear();
+        return;
+    }
+    if (p.is_relative())
+    {
+        p = d.dir / p; // "sub" or "../x": from the shown folder, not the process's
+    }
+    if (is_dir(p))
+    {
+        go = p;
+        return;
+    }
+    if (d.mode == FileDialogMode::SelectFolder)
+    {
+        d.error = std::format("{} is not a folder", p.string());
+        return;
+    }
+    std::error_code ec;
+    const bool exists = fs::is_regular_file(p, ec);
+    if (exists || (d.mode == FileDialogMode::Save && is_dir(p.parent_path())))
+    {
+        navigate(d, p.parent_path()); // Save: a new file's path puts its name in the Name field
+        d.file_name = p.filename().string();
+        d.selected = exists ? std::vector<std::string>{d.file_name} : std::vector<std::string>{};
+        accept_now = exists;
+        return;
+    }
+    d.error = std::format("{} not found", p.string());
+}
+
+// Address bar: the breadcrumb buttons, or, after a click on their empty end or Ctrl+L, a text
+// field with the whole path selected so it can be copied, cut or replaced by a pasted one; a
+// typed '/' / '~' or Ctrl+V with nothing focused starts it with that text. Enter goes there, Esc
+// or a click elsewhere restores the breadcrumbs.
+void draw_breadcrumbs(FileDialog& d, std::optional<fs::path>& go, bool& accept_now)
 {
     if (icon_button("##up", Icon::GoUp))
     {
@@ -280,6 +348,99 @@ void draw_breadcrumbs(FileDialog& d, std::optional<fs::path>& go)
         go = home_dir();
     }
     ImGui::SetItemTooltip("Home");
+    ImGui::SameLine();
+    // Ctrl+L (GTK, Explorer), Alt+D (Explorer), Ctrl+Shift+G (macOS "Go to Folder" is Cmd+Shift+G:
+    // Cmd works too there, as the text fields' Cmd+C / Cmd+V do; ImGui does not swap Ctrl for Cmd
+    // in chords).
+    ImGuiIO& io = ImGui::GetIO();
+    const auto chord = [&](ImGuiKeyChord mods_and_key)
+    {
+        return ImGui::Shortcut(ImGuiMod_Ctrl | mods_and_key)
+               || (io.ConfigMacOSXBehaviors && ImGui::Shortcut(ImGuiMod_Super | mods_and_key));
+    };
+    if (chord(ImGuiKey_L) || ImGui::Shortcut(ImGuiMod_Alt | ImGuiKey_D) || chord(ImGuiMod_Shift | ImGuiKey_G))
+    {
+        d.edit_location = d.focus_location = true;
+    }
+    // With nothing focused, a typed "/" or "~" starts a path (GTK, macOS) and Ctrl+V puts the
+    // clipboard's path in the field (macOS "Go to Folder" with a pasted path); Enter then goes.
+    std::string prefill;
+    if (!d.edit_location && !io.WantTextInput && !ImGui::IsAnyItemActive())
+    {
+        ImVector<ImWchar>& queue = io.InputQueueCharacters;
+        for (int i = 0; i < queue.Size; ++i)
+        {
+            if (queue[i] == '/' || queue[i] == '~') // this and what was typed after it in the frame
+            {
+                char utf8[5];
+                for (; i < queue.Size; ++i)
+                {
+                    prefill.append(utf8, static_cast<std::size_t>(ImTextCharToUtf8(utf8, queue[i])));
+                }
+                queue.resize(0); // not the list's '/' (vim search)
+            }
+        }
+        if (prefill.empty() && chord(ImGuiKey_V))
+        {
+            const char* clip = ImGui::GetClipboardText();
+            prefill = clip != nullptr ? clean_path(clip) : "";
+            if (prefill.contains('\n')) // not a path
+            {
+                prefill.clear();
+            }
+        }
+        if (!prefill.empty())
+        {
+            d.location = prefill;
+            d.edit_location = d.focus_location = true;
+        }
+    }
+    // A click on the empty end of the row (where it was last frame): the field drawn now takes
+    // this very click, so it is active with everything selected before the frame ends. Handing
+    // the focus over on the next frame lost the first keys at the 4 Hz idle frame rate.
+    const ImVec2 mouse = ImGui::GetMousePos();
+    if (!d.edit_location && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered()
+        && mouse.x >= d.address_rest[0] && mouse.y >= d.address_rest[1] && mouse.x < d.address_rest[2]
+        && mouse.y < d.address_rest[3])
+    {
+        d.edit_location = true;
+    }
+    if (d.edit_location)
+    {
+        if (d.focus_location)
+        {
+            // Activated in this frame, not SetKeyboardFocusHere's two to three frames later: at
+            // the idle frame rate a Ctrl+V right after Ctrl+L would otherwise arrive before the
+            // field is active and be lost. The field reads these two like a nav activation.
+            ImGuiContext& g = *ImGui::GetCurrentContext();
+            g.NavActivateId = ImGui::GetID("##location");
+            g.NavActivateFlags = ImGuiActivateFlags_PreferInput;
+            d.focus_location = false;
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool entered = ImGui::InputTextWithHint("##location", "Folder or file path", &d.location,
+                                                      ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        if (!prefill.empty()) // typed or pasted: the caret goes after it instead of selecting it
+        {
+            if (ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetItemID()); state != nullptr)
+            {
+                state->ReloadUserBufAndMoveToEnd();
+            }
+        }
+        if (entered)
+        {
+            go_location(d, go, accept_now);
+        }
+        if (ImGui::IsItemDeactivated()) // Enter, Esc or a click elsewhere
+        {
+            d.edit_location = false;
+            if (d.error.empty())
+            {
+                d.location = d.dir.string(); // a rejected path stays for the next Ctrl+L
+            }
+        }
+        return;
+    }
     fs::path acc;
     int i = 0;
     for (const auto& part : d.dir)
@@ -297,6 +458,21 @@ void draw_breadcrumbs(FileDialog& d, std::optional<fs::path>& go)
             go = acc;
         }
         ImGui::PopID();
+    }
+    ImGui::SameLine();
+    const float rest = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+    ImGui::InvisibleButton("##address", ImVec2(rest, ImGui::GetFrameHeight()));
+    d.address_rest[0] = ImGui::GetItemRectMin().x;
+    d.address_rest[1] = ImGui::GetItemRectMin().y;
+    d.address_rest[2] = ImGui::GetItemRectMax().x;
+    d.address_rest[3] = ImGui::GetItemRectMax().y;
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+    {
+        ImGui::SetTooltip("Click to type or paste a path (Ctrl+L)");
     }
 }
 
@@ -340,7 +516,8 @@ void draw_list(FileDialog& d, float height, std::optional<fs::path>& go, bool& a
     }
     int h = 0;
     const int page = static_cast<int>(height / ImGui::GetTextLineHeightWithSpacing());
-    const bool moved = vim_nav(d.vim, cur, static_cast<int>(rows.size()), page, d.focus_name, h);
+    bool unused_search = false; // '/' is the address bar's, taken before the list sees it
+    const bool moved = vim_nav(d.vim, cur, static_cast<int>(rows.size()), page, unused_search, h);
     const FileEntry* cur_entry = cur >= 0 ? &d.entries[static_cast<std::size_t>(rows[static_cast<std::size_t>(cur)])] : nullptr;
     if (moved)
     {
@@ -616,24 +793,7 @@ std::vector<std::string> file_dialog_draw(FileDialog& d)
     std::optional<fs::path> go;
     bool accept_now = false;
 
-    draw_breadcrumbs(d, go);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (d.focus_name && d.mode == FileDialogMode::SelectFolder) // no name field: '/' edits the path
-    {
-        ImGui::SetKeyboardFocusHere();
-        d.focus_name = false;
-    }
-    if (ImGui::InputTextWithHint("##location", "Folder path", &d.location, ImGuiInputTextFlags_EnterReturnsTrue))
-    {
-        if (is_dir(d.location))
-        {
-            go = fs::path(d.location);
-        }
-        else
-        {
-            d.error = std::format("{} is not a folder", d.location);
-        }
-    }
+    draw_breadcrumbs(d, go, accept_now);
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + style.ItemSpacing.y;
@@ -663,11 +823,6 @@ std::vector<std::string> file_dialog_draw(FileDialog& d)
         ImGui::SameLine();
         ImGui::SetNextItemWidth(has_filters ? -(combo_w + style.ItemSpacing.x) : -FLT_MIN);
         const std::string before = d.file_name;
-        if (d.focus_name)
-        {
-            ImGui::SetKeyboardFocusHere();
-            d.focus_name = false;
-        }
         if (ImGui::InputText("##name", &d.file_name, ImGuiInputTextFlags_EnterReturnsTrue))
         {
             accept_now = true;
