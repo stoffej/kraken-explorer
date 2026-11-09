@@ -286,7 +286,7 @@ TEST_CASE("address bar: a click past the breadcrumbs edits the path")
     frame();
     CHECK_FALSE(d.edit_location); // back to the breadcrumbs, the dialog stays
     CHECK(d.visible);
-    CHECK(d.location == fs::temp_directory_path().lexically_normal().string()); // the whole path was selected, typing replaces it
+    CHECK(d.location == d.dir.string()); // the shown folder again (Windows' temp path has a trailing separator) // the whole path was selected, typing replaces it
 }
 
 // The same driver as above, for the edge cases of the address bar and the Name field.
