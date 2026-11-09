@@ -192,3 +192,34 @@ TEST_CASE("shortcuts: chord names parse back, user overrides win, labels find co
     CHECK(command_by_label("Graph View") == Command::NewGraphView); // not the "##widget" one
     CHECK(command_by_label("Nope") == Command::Count);
 }
+
+TEST_CASE("shortcuts: every capturable key round-trips through chord_name / chord_parse with any modifiers")
+{
+    const UiTest ui;
+    int checked = 0;
+    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
+    {
+        const auto key = static_cast<ImGuiKey>(k);
+        const bool modifier = (key >= ImGuiKey_LeftCtrl && key <= ImGuiKey_RightSuper) || key >= ImGuiKey_ReservedForModCtrl;
+        const bool mouse = key >= ImGuiKey_MouseLeft && key <= ImGuiKey_MouseWheelY;
+        if (modifier || mouse) // chord_capture never returns these
+        {
+            continue;
+        }
+        for (const int mods : {0, int{ImGuiMod_Ctrl}, ImGuiMod_Ctrl | ImGuiMod_Shift, ImGuiMod_Alt | ImGuiMod_Super,
+                               ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiMod_Alt | ImGuiMod_Super})
+        {
+            const int chord = mods | k;
+            const std::string name = chord_name(chord);
+            INFO("key ", k, " name '", name, "'");
+            CHECK(chord_parse(name) == chord); // what Settings writes to the ini must read back
+            ++checked;
+        }
+    }
+    CHECK(checked > 400);
+    CHECK(chord_parse("Shift+Ctrl+T") == (ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_T)); // any modifier order
+    CHECK(chord_parse("Ctrl+") == -1);
+    CHECK(chord_parse("+T") == -1);
+    CHECK(chord_parse("Ctrl+Ctrl+T") == (ImGuiMod_Ctrl | ImGuiKey_T));
+    CHECK(chord_parse("ctrl+t") == -1); // case matters, as GetKeyName spells them
+}

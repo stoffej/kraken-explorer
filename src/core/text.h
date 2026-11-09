@@ -147,9 +147,9 @@ inline void append_duration(std::string& out, double seconds, int decimals = 3)
     for (;;)
     {
         const auto colon = s.find(':');
-        if (++fields > 3 || !parse_number(s.substr(0, colon), part) || part < 0.0)
+        if (++fields > 3 || !parse_number(s.substr(0, colon), part) || part < 0.0 || !std::isfinite(part))
         {
-            return std::nullopt;
+            return std::nullopt; // "inf" and "nan" parse as numbers but are no time
         }
         clock = clock * 60.0 + part;
         if (colon == std::string_view::npos)

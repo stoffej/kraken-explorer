@@ -858,12 +858,21 @@ void serve(std::stop_token stop, RestApi& api, App& app)
 std::string json_get(std::string_view body, std::string_view key)
 {
     const std::string quoted = std::format("\"{}\"", key);
-    std::size_t at = body.find(quoted);
-    if (at == std::string_view::npos)
+    std::size_t at = 0;
+    for (;;) // the key, not a string value spelled like it ({"name":"path","path":"x"})
     {
-        return "";
+        at = body.find(quoted, at);
+        if (at == std::string_view::npos)
+        {
+            return "";
+        }
+        at = body.find_first_not_of(" \t\r\n", at + quoted.size());
+        if (at != std::string_view::npos && body[at] == ':')
+        {
+            break;
+        }
     }
-    at = body.find_first_not_of(" \t\r\n:", at + quoted.size());
+    at = body.find_first_not_of(" \t\r\n", at + 1);
     if (at == std::string_view::npos)
     {
         return "";

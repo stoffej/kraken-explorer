@@ -55,16 +55,23 @@ uint64_t extract_raw_signal(const BusMessage& m, uint16_t start_bit, uint16_t le
         return value;
     }
 
-    // Little-endian (Intel): up to 8 bytes from start_bit / 8, zero past the buffer.
+    // Little-endian (Intel): up to 8 bytes from start_bit / 8, zero past the buffer. A signal
+    // that starts mid-byte and is longer than 64 - shift bits spills into a ninth byte.
     const int byte_offset = start_bit / 8;
+    const int shift = start_bit % 8;
     uint64_t raw = 0;
     for (int i = 0; i < 8 && byte_offset + i < bus_max_data_bytes; ++i)
     {
         raw |= static_cast<uint64_t>(m.data[byte_offset + i]) << (8 * i);
     }
+    raw >>= shift;
+    if (shift != 0 && byte_offset + 8 < bus_max_data_bytes)
+    {
+        raw |= static_cast<uint64_t>(m.data[byte_offset + 8]) << (64 - shift);
+    }
 
     const uint64_t mask = (length < 64) ? ((1ULL << length) - 1ULL) : ~0ULL;
-    return (raw >> (start_bit % 8)) & mask;
+    return raw & mask;
 }
 
 void inject_raw_signal(BusMessage& m, uint16_t start_bit, uint16_t length, bool big_endian, uint64_t value) noexcept
@@ -119,6 +126,15 @@ void inject_raw_signal(BusMessage& m, uint16_t start_bit, uint16_t length, bool 
     for (int i = 0; i < count && byte_offset + i < m.len; ++i)
     {
         m.data[byte_offset + i] = static_cast<uint8_t>(raw >> (8 * i));
+    }
+    // The bits shifted out above the 64-bit word: the top (length + shift - 64) bits of the value,
+    // into the low bits of a ninth byte.
+    const int spill = length + bit_shift - 64;
+    if (spill > 0 && byte_offset + 8 < bus_max_data_bytes && byte_offset + 8 < m.len)
+    {
+        const auto spill_mask = static_cast<uint8_t>((1u << spill) - 1u);
+        const auto spill_value = static_cast<uint8_t>((value >> (64 - bit_shift)) & spill_mask);
+        m.data[byte_offset + 8] = static_cast<uint8_t>((m.data[byte_offset + 8] & ~spill_mask) | spill_value);
     }
 }
 

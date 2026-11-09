@@ -32,6 +32,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -321,4 +322,81 @@ TEST_CASE("inject clips at len")
         CHECK(m.data[2] == 0x11);   // untouched
         CHECK(m.data[3] == 0x00);
     }
+}
+
+// An independent oracle: the signal's bits placed one by one. Little-endian (Intel): value bit i
+// is stream bit start+i, LSB first within a byte. Big-endian (Motorola): the internal start bit is
+// the MSB's position in an MSB-first stream, value bit length-1-i is stream bit start+i.
+namespace
+{
+
+void oracle_inject(std::array<uint8_t, 64>& data, uint16_t start, uint16_t length, bool big_endian, uint64_t value)
+{
+    for (uint16_t i = 0; i < length; ++i)
+    {
+        const unsigned pos = start + i;
+        const unsigned bit = big_endian ? 7 - pos % 8 : pos % 8;
+        const unsigned value_bit = big_endian ? length - 1 - i : i;
+        const bool one = (value >> value_bit) & 1ULL;
+        data[pos / 8] = static_cast<uint8_t>(one ? data[pos / 8] | (1u << bit) : data[pos / 8] & ~(1u << bit));
+    }
+}
+
+uint64_t oracle_extract(const std::array<uint8_t, 64>& data, uint16_t start, uint16_t length, bool big_endian)
+{
+    uint64_t value = 0;
+    for (uint16_t i = 0; i < length; ++i)
+    {
+        const unsigned pos = start + i;
+        const unsigned bit = big_endian ? 7 - pos % 8 : pos % 8;
+        const unsigned value_bit = big_endian ? length - 1 - i : i;
+        value |= static_cast<uint64_t>((data[pos / 8] >> bit) & 1u) << value_bit;
+    }
+    return value;
+}
+
+} // namespace
+
+TEST_CASE("every start bit and a spread of lengths, both byte orders: inject and extract agree with a bit-by-bit oracle")
+{
+    uint64_t rng = 0x9E3779B97F4A7C15ULL;
+    const auto next = [&]
+    {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        return rng;
+    };
+    int checked = 0;
+    for (const bool big_endian : {false, true})
+    {
+        for (const uint16_t length : {1, 2, 3, 7, 8, 9, 12, 15, 16, 17, 24, 31, 32, 33, 48, 63, 64})
+        {
+            for (uint16_t start = 0; start + length <= 512; ++start)
+            {
+                BusMessage m;
+                set_length(m, 64);
+                for (auto& b : m.data)
+                {
+                    b = static_cast<uint8_t>(next());
+                }
+                const uint64_t mask = length == 64 ? ~0ULL : (1ULL << length) - 1;
+                const uint64_t value = next() & mask;
+                std::array<uint8_t, 64> expected = m.data;
+                oracle_inject(expected, start, length, big_endian, value);
+                inject_raw_signal(m, start, length, big_endian, value);
+                if (m.data != expected || extract_raw_signal(m, start, length, big_endian) != value
+                    || oracle_extract(m.data, start, length, big_endian) != value)
+                {
+                    CAPTURE(big_endian);
+                    CAPTURE(length);
+                    CAPTURE(start);
+                    CHECK(m.data == expected);
+                    CHECK(extract_raw_signal(m, start, length, big_endian) == value);
+                }
+                ++checked;
+            }
+        }
+    }
+    CHECK(checked > 10000);
 }

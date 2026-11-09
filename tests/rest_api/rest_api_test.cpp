@@ -31,6 +31,23 @@ void add_fake(App& app)
 
 } // namespace
 
+TEST_CASE("json_get: a value spelled like a key is not the key; spacing, negatives, null, truncated bodies")
+{
+    CHECK(json_get(R"({"name":"id","id":5})", "id") == "5");
+    CHECK(json_get(R"({"comment":"path","path":"/x/y"})", "path") == "/x/y");
+    CHECK(json_get(R"({"path":"path"})", "path") == "path");
+    CHECK(json_get(R"({ "id"  :  7 })", "id") == "7");
+    CHECK(json_get("{\"id\":\n\t-3.5}", "id") == "-3.5");
+    CHECK(json_get(R"({"id":null})", "id") == "null");
+    CHECK(json_get(R"({"id":"unterminated)", "id") == "unterminated");
+    CHECK(json_get(R"({"id"})", "id").empty());
+    CHECK(json_get(R"({"id":})", "id").empty());
+    CHECK(json_get(R"({"id")", "id").empty());
+    CHECK(json_get("", "id").empty());
+    CHECK(json_get(R"({"identity":1,"id":2})", "id") == "2");
+    CHECK(json_get(R"({"a":"x\"id\":9","id":1})", "id") == "1");
+}
+
 TEST_CASE("json_get: strings with escapes, numbers, booleans, missing keys")
 {
     const std::string_view body = R"({"path": "a\"b\\c\nd", "id": 291, "fd": true, "iface":"vcan0"})";
@@ -283,4 +300,35 @@ TEST_CASE("interface, database, setup, graph, value search, commands")
     CHECK(status == 409);
     app_measurement_stop(app);
     std::filesystem::remove(dbc);
+}
+
+TEST_CASE("routes refuse garbage without touching the app")
+{
+    App app;
+    int status = 0;
+    for (const char* body : {"", "garbage", "{", R"({"iface":"nope","id":"zzz","data":"xx"})", R"({"id":"123"})"})
+    {
+        INFO("body ", body);
+        const std::string out = rest_api_handle(app, "POST", "/send", body, status);
+        CHECK(status == 400);
+        CHECK(out.find("\"error\"") != std::string::npos);
+    }
+    CHECK(trace_size(app.trace) == 0);
+    (void)rest_api_handle(app, "POST", "/trace/save", "{}", status);
+    CHECK(status == 400);
+    (void)rest_api_handle(app, "POST", "/command", R"({"nope":"x"})", status);
+    CHECK(status == 400);
+    (void)rest_api_handle(app, "POST", "/focus", "{}", status);
+    CHECK(status == 400);
+    (void)rest_api_handle(app, "GET", "/nope", "", status);
+    CHECK(status == 404);
+    (void)rest_api_handle(app, "DELETE", "/status", "", status);
+    CHECK(status == 404);
+    // The command is found by its key even when another value spells "name".
+    const std::string label = command_label(Command::MeasurementStart);
+    const std::string out =
+        rest_api_handle(app, "POST", "/command", std::format(R"({{"comment":"name","name":{}}})", json_string(label)), status);
+    CHECK(status == 200);
+    CHECK(out.find(label) != std::string::npos);
+    CHECK(menu_take(app.menu, Command::MeasurementStart)); // queued for the frame, like the menu item
 }

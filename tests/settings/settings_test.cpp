@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include <imgui.h>
 
@@ -358,5 +360,53 @@ TEST_CASE("workspace graphs: saved per tab, older workspaces without <graph> loa
     REQUIRE(c.workspace.tabs.size() == 1);
     CHECK(c.workspace.tabs[0].title == "Old");
     CHECK(c.workspace.tabs[0].graphs.empty()); // the frame adds the default graph, as before
+    ImGui::DestroyContext();
+}
+
+TEST_CASE("workspace load: garbage, truncated and foreign files are refused and leave the app untouched")
+{
+    const auto dir = temp_dir();
+    ImGui::CreateContext();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    App a;
+    fill(a);
+    a.setup.networks.push_back({.name = "Keep"});
+    const std::string good = (dir / "good.kraken").string();
+    REQUIRE(workspace_save(a, good));
+    std::ifstream f(good);
+    const std::string xml((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    const std::vector<std::pair<const char*, std::string>> bad = {
+        {"empty", ""},
+        {"garbage", "not xml at all \x01\x02"},
+        {"truncated", xml.substr(0, xml.size() / 2)},
+        {"wrong root", "<other workspace-version=\"2\"><setup/></other>"},
+        {"future version", "<kraken-workspace workspace-version=\"99\"><setup/></kraken-workspace>"},
+        {"no version", "<kraken-workspace><setup/></kraken-workspace>"},
+        {"version text", "<kraken-workspace workspace-version=\"two\"><setup/></kraken-workspace>"},
+        {"binary", std::string(4096, '\0')},
+    };
+    for (const auto& [name, content] : bad)
+    {
+        CAPTURE(name);
+        const std::string path = (dir / (std::string(name) + ".kraken")).string();
+        {
+            std::ofstream out(path, std::ios::binary);
+            out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        }
+        App b;
+        fill(b);
+        b.setup.networks.push_back({.name = "Keep"});
+        CHECK_FALSE(workspace_load(b, path));
+        check(b);
+        REQUIRE(b.setup.networks.size() == 1);
+        CHECK(b.setup.networks[0].name == "Keep");
+        CHECK(b.settings.workspace_path != path);
+    }
+    // A directory is no workspace either.
+    App c;
+    fill(c);
+    CHECK_FALSE(workspace_load(c, dir.string()));
+    check(c);
     ImGui::DestroyContext();
 }
