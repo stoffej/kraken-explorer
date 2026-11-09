@@ -15,6 +15,7 @@
 
 #include "core/bus_message.h"
 #include "decoders/decoders.h"
+#include "ui/file_dialog.h"
 #include "ui/vim_nav.h"
 
 // No <imgui.h> here: app.h includes this header and is included by targets without imgui.
@@ -129,11 +130,14 @@ struct TraceWindowState
     bool ascii = false; // data column as ASCII instead of hex (tracewindow/dataAsciiMode)
     bool decimal = false; // Data and ID columns in decimal instead of hex
     TraceFilter filter;
+    FileDialog dbc_dialog;
+    std::vector<std::string> dbc_paths; // waiting for a network choice
 
     // Everything below is derived from the trace by trace_window_update().
     std::string filter_edit; // text box contents, applied to filter.text after a short pause
     std::chrono::steady_clock::time_point filter_edited{};
     bool filter_dirty = true; // rebuild the filtered lists on the next update
+    uint64_t setup_gen = 0;   // Setup::generation used by the filtered lists
     uint64_t processed = 0;   // next trace index to look at
     uint64_t refilter = UINT64_MAX; // next index of a running rolling-log refilter, UINT64_MAX = none
     uint64_t index_base = 0;  // trace index shown as Index 1 (the trace begin at the last clear)
@@ -182,6 +186,11 @@ struct TraceWindowState
 // Pulls new frames from app.trace into the window's lists: incremental filter, aggregation
 // and protocol decoding. Applies a pending filter change or trace clear first. No ImGui.
 void trace_window_update(TraceWindowState& s, const App& app);
+
+// network == -1 creates a database-only CAN network. Failures are logged and shown in the status bar.
+bool trace_window_add_databases(App& app, int network, const std::vector<std::string>& paths);
+// OS file drop in ImGui screen coordinates; only the visible Trace window under the pointer accepts it.
+void trace_window_drop_files(App& app, const std::vector<std::string>& paths, float x, float y);
 
 // Shows trace index `index` in the Monitor tab as it is: the Log row (file view: with
 // `context_rows` above it) or, in the aggregated Monitor, the row of that frame's id.

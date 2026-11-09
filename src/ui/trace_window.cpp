@@ -20,6 +20,7 @@
 
 #include "app.h"
 #include "core/local_time.h"
+#include "core/log.h"
 #include "core/setup.h"
 #include "core/fuzzy.h"
 #include "core/text.h"
@@ -666,6 +667,11 @@ uint64_t trace_changed_mask(const BusMessage& cur, const BusMessage& prev) noexc
 void trace_window_update(TraceWindowState& s, const App& app)
 {
     const Trace& t = app.trace;
+    if (s.setup_gen != app.setup.generation)
+    {
+        s.setup_gen = app.setup.generation;
+        s.filter_dirty = true;
+    }
     if (s.filter_edited != std::chrono::steady_clock::time_point{}
         && std::chrono::steady_clock::now() - s.filter_edited >= filter_debounce)
     {
@@ -755,6 +761,75 @@ void trace_window_update(TraceWindowState& s, const App& app)
 }
 
 // --- drawing ------------------------------------------------------------------------------
+
+bool trace_window_add_databases(App& app, int network, const std::vector<std::string>& paths)
+{
+    const auto fail = [&](const std::string& text)
+    {
+        log_error(text);
+        status_bar_notice(app.status_bar, text);
+    };
+    if (network < -1 || (network >= 0 && static_cast<std::size_t>(network) >= app.setup.networks.size()))
+    {
+        fail("Cannot load DBC: the selected network no longer exists");
+        return false;
+    }
+    SetupNetwork fresh{.name = "CAN Database"};
+    SetupNetwork& net = network < 0 ? fresh : app.setup.networks[static_cast<std::size_t>(network)];
+    bool ok = true;
+    bool changed = false;
+    for (const std::string& path : paths)
+    {
+        if (!file_filter_match("*.dbc", path) || !setup_add_can_db(net, path))
+        {
+            fail("Failed to load DBC " + path);
+            ok = false;
+            continue;
+        }
+        changed = true;
+        log_info(std::format("Loaded DBC {} into {}", path, net.name));
+    }
+    if (changed)
+    {
+        if (network < 0)
+        {
+            app.setup.networks.push_back(std::move(fresh));
+        }
+        setup_rebuild_cache(app.setup);
+    }
+    return ok;
+}
+
+void trace_window_drop_files(App& app, const std::vector<std::string>& paths, float x, float y)
+{
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    for (int i = g.Windows.Size - 1; i >= 0; --i)
+    {
+        const ImGuiWindow* w = g.Windows[i];
+        if (!w->WasActive || w->Hidden || !w->OuterRectClipped.Contains(ImVec2(x, y)))
+        {
+            continue;
+        }
+        for (const WorkspaceTab& tab : app.workspace.tabs)
+        {
+            if (w->RootWindow == ImGui::FindWindowByName(workspace_window_name(tab, "Trace").c_str()))
+            {
+                TraceWindowState& s = app.trace_windows[tab.uid];
+                if (s.dbc_dialog.visible || !s.dbc_paths.empty())
+                {
+                    status_bar_notice(app.status_bar, "Finish the current DBC selection before dropping another file");
+                }
+                else
+                {
+                    s.dbc_paths = paths;
+                }
+                return;
+            }
+        }
+        break; // an unrelated window or popup covers the Trace
+    }
+    status_bar_notice(app.status_bar, "Drop DBC files in the CAN Monitor / Trace window");
+}
 
 namespace
 {
@@ -1977,6 +2052,60 @@ void draw_filter_popup(Ctx& c)
     ImGui::EndPopup();
 }
 
+void draw_dbc_selector(Ctx& c)
+{
+    TraceWindowState& s = c.s;
+    if (const auto paths = file_dialog_draw(s.dbc_dialog); !paths.empty())
+    {
+        s.dbc_paths = paths;
+    }
+    if (s.dbc_paths.empty())
+    {
+        return;
+    }
+    std::vector<int> networks;
+    for (std::size_t i = 0; i < c.app.setup.networks.size(); ++i)
+    {
+        const SetupNetwork& net = c.app.setup.networks[i];
+        if (net.interfaces.empty() || std::ranges::any_of(net.interfaces, [](const SetupInterface& intf)
+            { return intf.bus_type == BusType::CAN; }))
+        {
+            networks.push_back(static_cast<int>(i));
+        }
+    }
+    const auto load = [&](int network)
+    {
+        trace_window_add_databases(c.app, network, s.dbc_paths);
+        s.dbc_paths.clear();
+    };
+    if (networks.size() <= 1)
+    {
+        load(networks.empty() ? -1 : networks.front());
+        return;
+    }
+    ImGui::OpenPopup("Choose CAN network for DBC");
+    if (ImGui::BeginPopupModal("Choose CAN network for DBC", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Load the selected DBC files into:");
+        for (const int network : networks)
+        {
+            ImGui::PushID(network);
+            if (ImGui::Selectable(c.app.setup.networks[static_cast<std::size_t>(network)].name.c_str()))
+            {
+                load(network);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::PopID();
+        }
+        if (ImGui::Button("Cancel"))
+        {
+            s.dbc_paths.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
 void draw_toolbar(Ctx& c, float px)
 {
     TraceWindowState& s = c.s;
@@ -2027,8 +2156,9 @@ void draw_toolbar(Ctx& c, float px)
     same_line_or_wrap(icon_text_button_width("Clear"));
     command_button(c.app, Command::TraceClear, Icon::EditClear, "Clear"); // clears the trace, tooltip with Esc
     const float filter_btn = icon_text_button_width("Filter") + style.ItemSpacing.x;
-    same_line_or_wrap(80.0f * px + filter_btn);
-    ImGui::SetNextItemWidth(std::max(80.0f * px, ImGui::GetContentRegionAvail().x - filter_btn));
+    const float dbc_btn = icon_text_button_width("DBC") + style.ItemSpacing.x;
+    same_line_or_wrap(80.0f * px + filter_btn + dbc_btn);
+    ImGui::SetNextItemWidth(std::max(80.0f * px, ImGui::GetContentRegionAvail().x - filter_btn - dbc_btn));
     if (s.focus_filter)
     {
         ImGui::SetKeyboardFocusHere();
@@ -2043,6 +2173,14 @@ void draw_toolbar(Ctx& c, float px)
     {
         ImGui::OpenPopup("##trace_filter");
     }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!s.dbc_paths.empty());
+    if (icon_text_button("DBC", Icon::Database))
+    {
+        file_dialog_open(s.dbc_dialog, FileDialogMode::OpenMultiple, "Load DBC", "", {{"DBC", "*.dbc"}});
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Choose DBC files, or drop them anywhere in this window");
     int pct = -1; // a running refilter (live log) or file view merge (worker)
     if (s.refilter != UINT64_MAX && s.processed > c.app.trace.begin)
     {
@@ -2059,6 +2197,7 @@ void draw_toolbar(Ctx& c, float px)
         ImGui::TextDisabled("Filtering... %d %%", pct);
     }
     draw_filter_popup(c);
+    draw_dbc_selector(c);
 }
 
 } // namespace
@@ -2115,10 +2254,9 @@ void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab)
           .now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count()};
     draw_toolbar(c, px);
-    if (s.clears != app.trace.clears)
+    if (s.clears != app.trace.clears || s.setup_gen != app.setup.generation)
     {
-        // The toolbar's Clear is the only trace_clear that runs mid-draw (menu, Esc and control
-        // bar run before the windows): drop the rows it just invalidated before drawing them.
+        // Clear and DBC loading run mid-draw: refresh invalidated rows before drawing the table.
         trace_window_update(s, app);
     }
     if (ImGui::BeginTabBar("##trace_tabs"))

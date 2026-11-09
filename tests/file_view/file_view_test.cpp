@@ -190,6 +190,53 @@ struct FileView
 
 } // namespace
 
+TEST_CASE("DBC changes remap a loaded file and rebuild its name filter without reloading")
+{
+    const UiTest ui({1600, 900}, true, true);
+    FileView f;
+    TraceWindowState& s = f.log();
+    s.modes[static_cast<int>(TraceTab::Monitor)] = TraceViewMode::Rolling;
+    s.filter.text = "Tentacle1";
+    const auto finish_filter = [&]
+    {
+        trace_window_update(s, f.app);
+        REQUIRE(s.file_filter_result.valid());
+        REQUIRE(s.file_filter_result.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        trace_window_update(s, f.app);
+    };
+    finish_filter();
+    REQUIRE(s.file_filtered.size() == angle_frames);
+    const auto cache = f.app.trace_file;
+    const FrameCacheRec* records = cache->recs.data();
+    const auto dbc = f.dir / "replacement.dbc";
+    std::ofstream(dbc) << "VERSION \"\"\n\nNS_:\n\nBS_:\n\nBU_: NewECU\n\nBO_ 273 Renamed: 8 NewECU\n"
+                         " SG_ Angle : 0|16@1- (0.1,0) [-180|180] \"deg\" NewECU\n";
+    REQUIRE(trace_window_add_databases(f.app, 0, {dbc.string()}));
+    finish_filter();
+    CHECK(s.file_filtered.empty()); // no old-name rows remain
+    CHECK(f.app.trace_file == cache);
+    CHECK(f.app.trace_file->recs.data() == records);
+    CHECK(trace_size(f.app.trace) == frame_count);
+    const BusMessage m = trace_at(f.app.trace, f.app.trace.begin + 400);
+    const CanDbMessage* msg = setup_find_can_message(f.app.setup, m);
+    REQUIRE(msg != nullptr);
+    CHECK(msg->name == "Renamed");
+    const CanDbSignal* angle = can_db_find_signal(*msg, "Angle");
+    REQUIRE(angle != nullptr);
+    CHECK(can_signal_raw_to_physical(*angle, 200) == doctest::Approx(20.0));
+
+    s.filter.text = "Renamed";
+    s.filter_dirty = true;
+    finish_filter();
+    REQUIRE(s.file_filtered.size() == angle_frames);
+    CHECK(s.file_filtered.front() == 0);
+    CHECK(s.file_filtered.back() == frame_count - 2);
+    s.filter.hidden_nodes.insert("NewECU");
+    s.filter_dirty = true;
+    finish_filter();
+    CHECK(s.file_filtered.empty());
+}
+
 TEST_CASE("file view Log: vim keys, the wheel and Go to move the page")
 {
     const UiTest ui({1600, 900}, true, true);

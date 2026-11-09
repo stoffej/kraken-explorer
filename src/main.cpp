@@ -73,6 +73,23 @@ void wake_main_loop()
     }
 }
 
+void dbc_drop_callback(GLFWwindow* window, int count, const char** paths)
+{
+    auto& app = *static_cast<App*>(ImGui::GetIO().UserData);
+    double x = 0.0, y = 0.0;
+    glfwGetCursorPos(window, &x, &y);
+    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        int wx = 0, wy = 0;
+        glfwGetWindowPos(window, &wx, &wy);
+        x += wx;
+        y += wy;
+    }
+    trace_window_drop_files(app, std::vector<std::string>(paths, paths + count),
+                            static_cast<float>(x), static_cast<float>(y));
+    wake_main_loop();
+}
+
 // How long the idle loop may sleep when no event arrives. A replay loading or playing animates the
 // depth gauge sweep (~30 fps); a script or a pending ini save keeps the 4 Hz tick. So do the 2 s
 // after any wakeup, for ImGui's hover/tooltip delays and window settling, and an active text field
@@ -334,6 +351,8 @@ int main(int argc, char** argv)
     theme_logo_init(window, 256); // also the About logo, drawn at ~10x font size
 
     App app;
+    io.UserData = &app;
+    glfwSetDropCallback(window, dbc_drop_callback);
     app.tasks.wake = wake_main_loop; // RX threads and posted tasks end glfwWaitEventsTimeout at once
     settings_init(app); // before the interfaces: CANblaster, recording folder, tabs + layout
     settings_apply_theme(app);
@@ -466,6 +485,13 @@ int main(int argc, char** argv)
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         {
             ImGui::UpdatePlatformWindows();
+            for (ImGuiViewport* viewport : ImGui::GetPlatformIO().Viewports)
+            {
+                if (viewport->PlatformHandle != nullptr)
+                {
+                    glfwSetDropCallback(static_cast<GLFWwindow*>(viewport->PlatformHandle), dbc_drop_callback);
+                }
+            }
             ImGui::RenderPlatformWindowsDefault();
             glfwMakeContextCurrent(window); // the platform windows switched the GL context
         }

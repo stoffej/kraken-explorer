@@ -2,6 +2,8 @@
 #include <doctest/doctest.h>
 
 #include <initializer_list>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -232,6 +234,169 @@ static void draw_frame(App& app, TraceWindowState& s, const WorkspaceTab& tab, f
     draw_trace_window(app, s, tab);
     ImGui::EndFrame();
     app.menu.pending.reset();
+}
+
+namespace
+{
+struct MonitorDbc
+{
+    std::filesystem::path path = std::filesystem::temp_directory_path()
+        / ("kraken_monitor_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".dbc");
+
+    void write(const char* name, double factor = 1.0)
+    {
+        std::ofstream(path) << "VERSION \"\"\n\nNS_:\n\nBS_:\n\nBU_: ECU\n\nBO_ 256 " << name
+                           << ": 1 ECU\n SG_ Value : 0|8@1+ (" << factor << ",0) [0|255] \"V\" ECU\n";
+    }
+    ~MonitorDbc() { std::filesystem::remove(path); }
+};
+} // namespace
+
+TEST_CASE("DBC loading remaps existing log frames and name filters without new traffic")
+{
+    App app;
+    MonitorDbc dbc;
+    dbc.write("Before");
+    REQUIRE(trace_window_add_databases(app, -1, {dbc.path.string()}));
+    REQUIRE(app.setup.networks.size() == 1);
+    TraceWindowState s;
+    s.filter.text = "After";
+    const BusMessage msgs[] = {frame(0x100, {3}), frame(0x100, {4}, 0, 2)};
+    trace_append(app.trace, msgs);
+    trace_window_update(s, app);
+    REQUIRE(s.rolling.empty());
+    REQUIRE(s.agg.size() == 1);
+    const uint64_t generation = app.setup.generation;
+    const CanDbMessage* before = setup_find_can_message(app.setup, msgs[0]);
+
+    dbc.write("After", 2.0);
+    REQUIRE(trace_window_add_databases(app, 0, {dbc.path.string()}));
+    CHECK(app.setup.generation > generation);
+    CHECK(app.setup.networks[0].can_dbs.size() == 1);
+    CHECK(setup_find_can_message(app.setup, msgs[0]) == before); // reload preserves held pointers
+    trace_window_update(s, app);
+    REQUIRE(s.rolling.size() == 2);
+    CHECK(s.rolling[1].prev == 0);
+    REQUIRE(before != nullptr);
+    CHECK(before->name == "After");
+    const CanDbSignal* sig = can_db_find_signal(*before, "Value");
+    REQUIRE(sig != nullptr);
+    std::string value;
+    trace_append_signal_value(value, *sig, 3);
+    CHECK(value == "6 V");
+    CHECK(trace_size(app.trace) == 2);
+
+    s.filter.hidden_nodes.insert("ECU");
+    s.filter_dirty = true;
+    trace_window_update(s, app);
+    CHECK(s.rolling.empty());
+    app.setup.networks[0].can_dbs.clear();
+    setup_rebuild_cache(app.setup);
+    s.filter.text.clear();
+    trace_window_update(s, app);
+    CHECK(s.rolling.size() == 2); // the stale sender filter no longer hides raw frames
+}
+
+TEST_CASE("invalid DBC loads leave the setup and existing decoding intact")
+{
+    App app;
+    MonitorDbc dbc;
+    CHECK_FALSE(trace_window_add_databases(app, -1, {dbc.path.string()}));
+    CHECK(app.setup.networks.empty());
+    dbc.write("Valid");
+    REQUIRE(trace_window_add_databases(app, -1, {dbc.path.string()}));
+    const uint64_t generation = app.setup.generation;
+    CHECK_FALSE(trace_window_add_databases(app, 5, {dbc.path.string()}));
+    std::ofstream(dbc.path) << "BO_ broken\n";
+    CHECK_FALSE(trace_window_add_databases(app, 0, {dbc.path.string()}));
+    CHECK(app.setup.generation == generation);
+    const CanDbMessage* msg = setup_find_can_message(app.setup, frame(0x100, {3}));
+    REQUIRE(msg != nullptr);
+    CHECK(msg->name == "Valid");
+    CHECK_FALSE(app.status_bar.notice.empty());
+}
+
+TEST_CASE("drop targets the visible Trace and asks which CAN network receives the DBC")
+{
+    const UiTest ui;
+    App app;
+    WorkspaceTab& tab = workspace_add_tab(app.workspace, "Trace", 1);
+    TraceWindowState& s = app.trace_windows[tab.uid];
+    app.setup.networks = {{.name = "CAN A", .interfaces = {{.iface = 0}}},
+                          {.name = "LIN", .interfaces = {{.iface = 1, .bus_type = BusType::LIN}}},
+                          {.name = "CAN B", .interfaces = {{.iface = 2}}}};
+    MonitorDbc dbc;
+    dbc.write("Selected");
+    draw_frame(app, s, tab);
+    draw_frame(app, s, tab);
+    trace_window_drop_files(app, {dbc.path.string()}, 1500, 800);
+    CHECK(s.dbc_paths.empty());
+    trace_window_drop_files(app, {dbc.path.string()}, 500, 400);
+    REQUIRE(s.dbc_paths.size() == 1);
+    draw_frame(app, s, tab);
+    draw_frame(app, s, tab);
+    REQUIRE(ImGui::IsPopupOpen("Choose CAN network for DBC", ImGuiPopupFlags_AnyPopupId));
+    CHECK(app.setup.networks[0].can_dbs.empty());
+    CHECK(app.setup.networks[2].can_dbs.empty());
+    ImGuiWindow* popup = ImGui::FindWindowByName("Choose CAN network for DBC");
+    REQUIRE(popup != nullptr);
+    const int network = 2;
+    ImGui::ActivateItemByID(ImHashStr("CAN B", 0, ImHashData(&network, sizeof network, popup->ID)));
+    draw_frame(app, s, tab);
+    CHECK(s.dbc_paths.empty());
+    CHECK(app.setup.networks[0].can_dbs.empty());
+    CHECK(app.setup.networks[1].can_dbs.empty());
+    REQUIRE(app.setup.networks[2].can_dbs.size() == 1);
+
+    BusMessage selected = frame(0x100, {1});
+    selected.iface = 2;
+    REQUIRE(setup_find_can_message(app.setup, selected) != nullptr);
+    selected.iface = 0;
+    CHECK(setup_find_can_message(app.setup, selected) == nullptr);
+}
+
+TEST_CASE("DBC button opens the file chooser beside Filter on a reduced-width toolbar")
+{
+    const UiTest ui({1400, 700});
+    App app;
+    TraceWindowState s;
+    const WorkspaceTab tab{.title = "Trace", .uid = 1};
+    draw_frame(app, s, tab, 1300);
+    draw_frame(app, s, tab, 1300);
+    ImGuiWindow* w = ImGui::FindWindowByName(workspace_window_name(tab, "Trace").c_str());
+    REQUIRE(w != nullptr);
+    const ImGuiID dbc = ImHashStr("##icon_text", 0, w->GetID("DBC"));
+    const ImGuiID filter = ImHashStr("##icon_text", 0, w->GetID("Filter"));
+    ImVec2 filter_pos{-1, -1};
+    ImVec2 dbc_pos{-1, -1};
+    ImGuiIO& io = ImGui::GetIO();
+    for (float y = 25; y < 120 && dbc_pos.x < 0; y += 6)
+    {
+        for (float x = 6; x < 1300; x += 6)
+        {
+            io.AddMousePosEvent(x, y);
+            draw_frame(app, s, tab, 1300);
+            const ImGuiID hovered = ImGui::GetCurrentContext()->HoveredIdPreviousFrame;
+            if (hovered == filter && filter_pos.x < 0)
+            {
+                filter_pos = {x, y};
+            }
+            if (hovered == dbc)
+            {
+                dbc_pos = {x, y};
+                break;
+            }
+        }
+    }
+    REQUIRE(filter_pos.x >= 0);
+    REQUIRE(dbc_pos.x > filter_pos.x);
+    CHECK(dbc_pos.y == filter_pos.y);
+    io.AddMouseButtonEvent(0, true);
+    draw_frame(app, s, tab, 1300);
+    io.AddMouseButtonEvent(0, false);
+    draw_frame(app, s, tab, 1300);
+    CHECK(s.dbc_dialog.visible);
+    CHECK(s.dbc_dialog.filters[0].patterns == "*.dbc");
 }
 
 TEST_CASE("toolbar Clear in the rolling log drops the rows in the same frame")
