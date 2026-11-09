@@ -2180,7 +2180,7 @@ void draw_toolbar(Ctx& c, float px)
         file_dialog_open(s.dbc_dialog, FileDialogMode::OpenMultiple, "Load DBC", "", {{"DBC", "*.dbc"}});
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Choose DBC files, or drop them anywhere in this window");
+    ImGui::SetItemTooltip("Choose DBC files, or drop them anywhere in this window\n(file drop is experimental: not yet verified on every platform)");
     int pct = -1; // a running refilter (live log) or file view merge (worker)
     if (s.refilter != UINT64_MAX && s.processed > c.app.trace.begin)
     {
