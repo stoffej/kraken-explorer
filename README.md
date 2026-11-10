@@ -42,7 +42,7 @@ Building from source, interfaces, permissions and every feature: [docs/manual.md
 
 ## Drive it from outside: REST API
 
-Start with `kraken-explorer --api 8321` and talk JSON to `127.0.0.1:8321`:
+Start with `kraken-explorer --api 8321` (the desktop shortcut does) and talk JSON to `127.0.0.1:8321`:
 
 ```bash
 curl -s localhost:8321/status
