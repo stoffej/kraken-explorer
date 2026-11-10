@@ -683,7 +683,8 @@ void draw_can_status(App& app, CanStatusState& s, const WorkspaceTab& tab)
         {"Load (%)", 6.0f, -1},
         {"Bits", 6.0f, -1},
     };
-    constexpr ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX | ImGuiTableFlags_RowBg
+    // Stretch columns (weights = the em widths), no horizontal scrolling: the table always fits the window.
+    constexpr ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg
                                       | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable;
     {
         // The width every column needs, for the startup size-to-fit of the left dock column.
@@ -697,12 +698,11 @@ void draw_can_status(App& app, CanStatusState& s, const WorkspaceTab& tab)
     }
     if (ImGui::BeginTable("##can_status", IM_ARRAYSIZE(columns), flags))
     {
-        const float em = ImGui::GetFontSize();
         ImGui::TableSetupScrollFreeze(0, 1);
         for (const Column& c : columns)
         {
-            ImGui::TableSetupColumn(c.name, ImGuiTableColumnFlags_WidthFixed | (c.sort < 0 ? ImGuiTableColumnFlags_NoSort : 0),
-                                    em * c.width, static_cast<ImGuiID>(c.sort));
+            ImGui::TableSetupColumn(c.name, ImGuiTableColumnFlags_WidthStretch | (c.sort < 0 ? ImGuiTableColumnFlags_NoSort : 0),
+                                    c.width, static_cast<ImGuiID>(c.sort));
         }
         if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs != nullptr && specs->SpecsDirty)
         {

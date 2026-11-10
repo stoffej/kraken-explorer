@@ -1100,10 +1100,13 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
     {
         ImGui::TableSetupColumn("Interface", ImGuiTableColumnFlags_WidthFixed, em * 6.0f);
         ImGui::TableSetupColumn("Request -> Response", ImGuiTableColumnFlags_WidthFixed, em * 11.0f);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, em * 12.0f);
         ImGui::TableSetupColumn("Services", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, em * 9.0f);
         ImGui::TableHeadersRow();
+        // Borders on the Name field and the Services button: the frame and button colours are close
+        // to the alternate row's, so on every other row they vanished.
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
         for (std::size_t i = 0; i < w.learner.ecus.size(); ++i)
         {
             UdsEcu& e = w.learner.ecus[i];
@@ -1149,6 +1152,7 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
             ImGui::EndDisabled();
             ImGui::PopID();
         }
+        ImGui::PopStyleVar();
         ImGui::EndTable();
         vim_yank_menu(w.vim, w.yank_items);
     }
@@ -1241,14 +1245,14 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
         }
         busy = w.busy;
     }
-    const std::optional<UdsTarget> target = current_target(w);
-    if (target)
-    {
-        const std::scoped_lock lock(w.mutex);
     if (!w.extended_chosen && !busy) // never switch width under a running request or sweep
     {
         w.extended = iface_rx_extended(app, w.iface).value_or(false);
     }
+    const std::optional<UdsTarget> target = current_target(w);
+    if (target)
+    {
+        const std::scoped_lock lock(w.mutex);
         w.target = *target; // tester present follows the selection
     }
     if (!w.open)
