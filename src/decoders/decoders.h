@@ -100,12 +100,32 @@ struct J1939Decoder
 [[nodiscard]] uint32_t j1939_pgn(uint32_t id) noexcept;
 [[nodiscard]] std::string j1939_pgn_name(uint32_t pgn);
 
+// --- NMEA 2000 ---
+
+struct N2kSession
+{
+    std::vector<BusMessage> frames;
+    std::vector<uint8_t> data;
+    int expected_size = 0;
+    uint8_t last_frame = 0; // byte 0 of the last fast-packet frame
+};
+
+struct N2kDecoder
+{
+    std::unordered_map<uint64_t, N2kSession> sessions; // keyed by interface, direction, PGN, SA
+};
+
+// Data page 1 PGNs (126208..131071): single frames, and fast packets reassembled. The
+// description holds the decoded fields of the PGNs it knows.
+[[nodiscard]] DecodeStatus n2k_decode(N2kDecoder& d, const BusMessage& frame, ProtocolMessage& out);
+
 // --- Routing ---
 
 struct ProtocolDecoder
 {
     UdsDecoder uds;
     J1939Decoder j1939;
+    N2kDecoder n2k; // fed by the trace window next to protocol_decode (a frame is J1939 and N2K)
 };
 
 // Extended ids go to J1939 first (then UDS), standard ids and LIN

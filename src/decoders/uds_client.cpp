@@ -46,6 +46,11 @@ constexpr std::array<uint8_t, 27> request_sids = {
     0x10, 0x11, 0x14, 0x19, 0x22, 0x23, 0x24, 0x27, 0x28, 0x29, 0x2A, 0x2C, 0x2E, 0x2F,
     0x31, 0x34, 0x35, 0x36, 0x37, 0x38, 0x3D, 0x3E, 0x83, 0x84, 0x85, 0x86, 0x87};
 
+// The services the service scan probes: only reads (and TesterPresent). A probe of a write,
+// reset, routine or download service can change the ECU (a short 2E / 14 / 31 an ECU takes
+// as valid), so those are never sent; they show up as not probed.
+constexpr std::array<uint8_t, 5> read_sids = {0x19, 0x22, 0x23, 0x24, 0x3E};
+
 bool functional_id(const UdsTarget& t)
 {
     return t.extended ? ((t.tx_id >> 16) & 0xFF) == 0xDB : t.tx_id == 0x7DF;
@@ -571,6 +576,10 @@ std::vector<UdsEcu> uds_sweep(UdsClient& c, const UdsSend& send, const UdsSweep&
     {
         return found; // the probe must fit one single frame
     }
+    std::array<uint8_t, 8> sf{}; // single frame: PCI length byte, then the request
+    sf[0] = static_cast<uint8_t>(sweep.request.size());
+    std::ranges::copy(sweep.request, sf.begin() + 1);
+    const auto probe = std::span(sf).first(sweep.request.size() + 1);
 
     const auto report = [&](const UdsEcu& e)
     {
@@ -654,7 +663,7 @@ std::vector<UdsEcu> uds_sweep(UdsClient& c, const UdsSend& send, const UdsSweep&
             }
             UdsTarget t = sweep.transport;
             t.tx_id = 0x18DA0000u | (static_cast<uint32_t>(sa) << 8) | sweep.tester;
-            (void)send_pdu(send, t, t.tx_id, sweep.request);
+            (void)send_pdu(send, t, t.tx_id, probe);
             drain(t.tx_id, Clock::now() + sweep.wait);
         }
     }
@@ -668,7 +677,7 @@ std::vector<UdsEcu> uds_sweep(UdsClient& c, const UdsSend& send, const UdsSweep&
             }
             UdsTarget t = sweep.transport;
             t.tx_id = id;
-            (void)send_pdu(send, t, id, sweep.request);
+            (void)send_pdu(send, t, id, probe);
             drain(id, Clock::now() + sweep.wait);
         }
     }
@@ -679,7 +688,7 @@ std::vector<UdsServiceProbe> uds_service_scan(UdsClient& c, const UdsSend& send,
                                               const UdsTiming& timing, const std::atomic<bool>* stop)
 {
     std::vector<UdsServiceProbe> out;
-    for (const uint8_t sid : request_sids)
+    for (const uint8_t sid : read_sids)
     {
         if (stop && stop->load())
         {
@@ -687,7 +696,7 @@ std::vector<UdsServiceProbe> uds_service_scan(UdsClient& c, const UdsSend& send,
         }
         // The smallest well-formed request: services with a sub-function get 0x00, the rest just the SID.
         std::vector<uint8_t> req = {sid};
-        if (has_suppress_bit(sid) || sid == 0x22 || sid == 0x2E || sid == 0x2F || sid == 0x14)
+        if (has_suppress_bit(sid) || sid == 0x22)
         {
             req.push_back(0x00);
         }

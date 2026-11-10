@@ -221,6 +221,9 @@ const std::array<double, 3>& graph_cursor_values(GraphSignal& s, double a, doubl
 
 // Value text: CAN signals at their resolution (can_signal_format), others %.6g; NaN = "-".
 [[nodiscard]] std::string graph_format_value(const GraphSignal& s, double v);
+// "Message.Signal" as the signal search / REST API name it, so equal signal names of different
+// messages tell apart; Bus Load signals keep their own name.
+[[nodiscard]] std::string graph_signal_label(const GraphSignal& s);
 // First colormap colour no signal of g uses (needs an ImPlot context).
 [[nodiscard]] uint32_t graph_next_color(const GraphState& g);
 // Removes signal i; the XY X signal keeps pointing at the same signal.

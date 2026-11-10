@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -79,6 +80,9 @@ struct App
     std::deque<Iface> ifaces;              // every enumerated channel, index = BusMessage::iface
     std::vector<RxConsumer> rx_consumers;  // run on the RX threads, changed only while they are stopped
     std::vector<BusMessage> rx_scratch;
+    // CAN frames received per interface (index = Iface index): [0] 11-bit ids, [1] 29-bit. Pre-selects the
+    // id width in the frame editors. ponytail: counted since start, reset on reopen if channels change buses.
+    std::vector<std::array<uint64_t, 2>> rx_id_width;
     std::map<unsigned, TxGenerator> tx_generators; // key: WorkspaceTab::uid; after ifaces (its thread sends on them)
     std::map<unsigned, Replay> replays;      // key: WorkspaceTab::uid; after ifaces (its thread sends on them)
     FileDialog trace_file_dialog;            // Trace > Save Trace to file / Export full trace / Import full trace

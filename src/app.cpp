@@ -14,6 +14,7 @@
 #include "core/platform.h"
 #include "core/trace_file_writer.h"
 #include "drivers/grip.h"
+#include "ui/raw_tx.h"
 #include "ui/help_overlay.h"
 
 namespace
@@ -179,6 +180,7 @@ void app_frame(App& app)
     {
         inbox_take(iface.inbox, app.rx_scratch);
     }
+    rx_id_width_update(app); // 11 / 29-bit pre-selection in the frame editors
     for (auto& [uid, gen] : app.tx_generators)
     {
         tx_generator_on_rx(gen, app.rx_scratch); // Generator rows triggered "On receive"

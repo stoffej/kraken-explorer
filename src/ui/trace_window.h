@@ -51,6 +51,7 @@ enum class TraceTab
     Monitor,
     Uds,
     J1939,
+    N2k,
     Count,
 };
 
@@ -109,7 +110,7 @@ struct ProtoRow
     uint32_t order = 0;
 };
 
-// One protocol tab (UDS or J1939): both the rolling list and the aggregated rows.
+// One protocol tab (UDS, J1939 or NMEA 2000): both the rolling list and the aggregated rows.
 struct ProtoView
 {
     std::vector<ProtoRow> rolling;
@@ -124,7 +125,7 @@ struct TraceWindowState
 {
     TraceTab tab = TraceTab::Monitor;
     TraceViewMode modes[static_cast<int>(TraceTab::Count)] = {TraceViewMode::Aggregated, TraceViewMode::Rolling,
-                                                              TraceViewMode::Aggregated};
+                                                              TraceViewMode::Aggregated, TraceViewMode::Aggregated};
     TimestampMode ts_mode = TimestampMode::Delta;
     bool autoscroll = true;
     bool ascii = false; // data column as ASCII instead of hex (tracewindow/dataAsciiMode)
@@ -157,6 +158,7 @@ struct TraceWindowState
     ProtocolDecoder decoder;
     ProtoView uds;
     ProtoView j1939;
+    ProtoView n2k;
     std::size_t max_proto_rows = 100000; // oldest 20% dropped beyond this
     bool scroll_pending = false;
 

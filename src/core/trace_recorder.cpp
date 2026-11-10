@@ -140,6 +140,12 @@ bool finish_file(Recorder& r)
     {
         append_trc_header(tail, duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count());
     }
+    else if (r.active.format == TraceFileFormat::VectorMdf && r.file_frames == 0)
+    {
+        std::vector<uint8_t> header;
+        r.mdf = append_mdf_header(header, duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count(), 0, true);
+        tail.append(reinterpret_cast<const char*>(header.data()), header.size());
+    }
     else if (r.active.format == TraceFileFormat::PcapNg && r.file_frames == 0)
     {
         // A pcapng file must at least contain its section header.
@@ -149,6 +155,12 @@ bool finish_file(Recorder& r)
     }
 
     bool ok = write_chunk(r, tail);
+    // MF4 is written unfinalized, so a crash leaves a readable file; a clean end finalizes it.
+    if (ok && r.active.format == TraceFileFormat::VectorMdf && !mdf_finalize(r.file, r.mdf, r.file_frames))
+    {
+        set_io_error(r, "write");
+        ok = false;
+    }
     if (ok && !r.file.flush())
     {
         set_io_error(r, "write");
@@ -232,6 +244,21 @@ bool write_messages(Recorder& r, const std::vector<BusMessage>& messages)
                     pcapng_append_interface(bin, r.iface_name(m.iface));
                 }
                 pcapng_append_packet(bin, m, it->second);
+                chunk.append(reinterpret_cast<const char*>(bin.data()), bin.size());
+                break;
+            }
+
+            case TraceFileFormat::VectorMdf:
+            {
+                bin.clear();
+                if (r.file_frames == 0)
+                {
+                    r.file_start_ns = m.ts_ns;
+                    r.mdf = append_mdf_header(bin, m.ts_ns, 0, true);
+                }
+                BusMessage at = m; // a later batch can hold a slightly older frame: clamp to 0
+                at.ts_ns = std::max(m.ts_ns, r.file_start_ns);
+                append_mdf_record(bin, at, r.file_start_ns);
                 chunk.append(reinterpret_cast<const char*>(bin.data()), bin.size());
                 break;
             }

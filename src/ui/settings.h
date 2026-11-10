@@ -27,6 +27,7 @@ struct Settings
     bool os_dark = false;                // desktop preference, queried once at start
     bool update_check = true;            // ui/updater: look for a new release at start and daily
     bool uds_addr_ext = false;           // uds/addr_ext: the bus uses extended (address-byte) ISO-TP
+    bool n2k = false;                    // n2k/enabled: NMEA 2000 tab in the trace window
 
     std::string ini_path;       // empty = nothing is persisted
     std::string workspace_path; // current .kraken file, empty = never saved

@@ -120,7 +120,7 @@ const float* fixed_widths()
     return widths;
 }
 
-constexpr const char* tab_labels[] = {"Monitor", "UDS Protocol", "J1939"};
+constexpr const char* tab_labels[] = {"Monitor", "UDS Protocol", "J1939", "NMEA 2000"};
 
 // --- keys ---------------------------------------------------------------------------------
 
@@ -149,7 +149,7 @@ uint64_t proto_agg_key(const ProtocolMessage& pm)
 {
     const BusMessage* f = pm.raw_frames.empty() ? nullptr : &pm.raw_frames.front();
     const uint64_t iface = f != nullptr ? f->iface : 0;
-    if (is_protocol(pm, "J1939"))
+    if (is_protocol(pm, "J1939") || is_protocol(pm, "N2K"))
     {
         const auto sa = pm.metadata.find("Source Address");
         return iface << 32 | static_cast<uint64_t>(pm.id) << 8 | (sa != pm.metadata.end() ? sa->second & 0xFF : 0);
@@ -404,6 +404,11 @@ void process_frame(TraceWindowState& s, const App& app, uint64_t index)
             proto_add(s, app, s.j1939, std::move(pm));
         }
     }
+    // NMEA 2000 runs on J1939: the same frame also goes to the N2K tab.
+    if (ProtocolMessage n2k; app.settings.n2k && n2k_decode(s.decoder.n2k, m, n2k) == DecodeStatus::Completed)
+    {
+        proto_add(s, app, s.n2k, std::move(n2k));
+    }
 }
 
 void reset_views(TraceWindowState& s, uint64_t begin)
@@ -420,6 +425,7 @@ void reset_views(TraceWindowState& s, uint64_t begin)
     protocol_reset(s.decoder);
     s.uds = {};
     s.j1939 = {};
+    s.n2k = {};
 }
 
 // Any filter set (text, TX/RX, hidden ids or interfaces)?
@@ -732,6 +738,7 @@ void trace_window_update(TraceWindowState& s, const App& app)
         s.agg_dirty = true;
         proto_rebuild_visible(s, app, s.uds);
         proto_rebuild_visible(s, app, s.j1939);
+        proto_rebuild_visible(s, app, s.n2k);
         s.scroll_pending = true;
     }
     if (s.refilter != UINT64_MAX)
@@ -1170,7 +1177,8 @@ void table_nav(Ctx& c, int count, bool rolling)
         s.nav_scroll = true; // bring the row into the clipper so its cells get drawn
     }
     // Held until the tab bar has switched (SetSelected lands a frame later, maybe on an earlier tab).
-    if (const int to = std::clamp(static_cast<int>(s.tab) + h, 0, static_cast<int>(TraceTab::Count) - 1);
+    const TraceTab last = c.app.settings.n2k ? TraceTab::N2k : TraceTab::J1939; // the N2K tab only when on
+    if (const int to = std::clamp(static_cast<int>(s.tab) + h, 0, static_cast<int>(last));
         to != static_cast<int>(s.tab))
     {
         s.tab_goto = to;
@@ -1771,7 +1779,8 @@ void proto_cells(Ctx& c, const ProtoRow& row)
 {
     const ProtocolMessage& pm = row.msg;
     const BusMessage* f = pm.raw_frames.empty() ? nullptr : &pm.raw_frames.front();
-    const bool j1939 = is_protocol(pm, "J1939");
+    const bool n2k = is_protocol(pm, "N2K");
+    const bool j1939 = n2k || is_protocol(pm, "J1939"); // NMEA 2000 has J1939 ids
     std::string& b = c.buf;
     b.clear();
     append_time(b, c.s.ts_mode, pm.ts_ns, row.prev_ts_ns, c.s.first_ts_ns);
@@ -1781,10 +1790,14 @@ void proto_cells(Ctx& c, const ProtoRow& row)
         cell(col_channel, iface_name(c.app, f->iface));
         cell(col_direction, has_flag(*f, bus_flag::tx) ? "TX" : "RX");
     }
-    cell(col_type, j1939 ? (((pm.id >> 8) & 0xFF) < 240 ? "PDU1" : "PDU2") : "UDS");
+    cell(col_type, n2k ? (pm.raw_frames.size() > 1 ? "Fast" : "Single") : j1939 ? (((pm.id >> 8) & 0xFF) < 240 ? "PDU1" : "PDU2") : "UDS");
     b.clear();
     const uint32_t raw_id = f != nullptr ? f->id : 0;
-    if (j1939)
+    if (n2k)
+    {
+        std::format_to(std::back_inserter(b), "0x{:X} (PGN:{})", raw_id, pm.id); // NMEA 2000 PGNs are decimal
+    }
+    else if (j1939)
     {
         std::format_to(std::back_inserter(b), "0x{:X} (PGN:{:X})", raw_id, pm.id);
     }
@@ -2263,6 +2276,10 @@ void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab)
     {
         for (int i = 0; i < static_cast<int>(TraceTab::Count); ++i)
         {
+            if (i == static_cast<int>(TraceTab::N2k) && !app.settings.n2k)
+            {
+                continue; // Settings > NMEA 2000 off
+            }
             if (!ImGui::BeginTabItem(tab_labels[i], nullptr, i == s.tab_goto ? ImGuiTabItemFlags_SetSelected : 0))
             {
                 continue;
@@ -2292,7 +2309,8 @@ void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab)
                 }
                 break;
             case TraceTab::Uds: rolling ? draw_proto_rolling(c, s.uds, px) : draw_proto_aggregated(c, s.uds, px); break;
-            default: rolling ? draw_proto_rolling(c, s.j1939, px) : draw_proto_aggregated(c, s.j1939, px); break;
+            case TraceTab::J1939: rolling ? draw_proto_rolling(c, s.j1939, px) : draw_proto_aggregated(c, s.j1939, px); break;
+            default: rolling ? draw_proto_rolling(c, s.n2k, px) : draw_proto_aggregated(c, s.n2k, px); break;
             }
             ImGui::PopID();
             ImGui::EndTabItem();
@@ -2307,7 +2325,7 @@ void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab)
 namespace
 {
 
-constexpr const char* view_attrs[] = {"monitor-view", "uds-view", "j1939-view"};
+constexpr const char* view_attrs[] = {"monitor-view", "uds-view", "j1939-view", "n2k-view"};
 
 } // namespace
 

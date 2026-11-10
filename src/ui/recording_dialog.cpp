@@ -27,6 +27,7 @@ constexpr FormatItem formats[] = {
     {TraceFileFormat::CanDump, "Linux candump (*.candump)"},
     {TraceFileFormat::PcapNg, "PCAPng (*.pcapng)"},
     {TraceFileFormat::Trc, "PEAK PCAN trace (*.trc)"},
+    {TraceFileFormat::VectorMdf, "ASAM MDF4 (*.mf4)"},
 };
 
 void draw_status(const Recorder& r)

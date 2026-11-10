@@ -180,7 +180,7 @@ jobs:
         install -Dm755 -s build/src/kraken-explorer AppDir/usr/bin/kraken-explorer
         install -Dm644 packaging/kraken-explorer.png AppDir/usr/share/icons/hicolor/256x256/apps/kraken-explorer.png
         mkdir -p AppDir/usr/share/applications
-        sed 's|Exec=/usr/bin/kraken-explorer %f|Exec=kraken-explorer %f|' kraken-explorer.desktop \
+        sed 's|Exec=/usr/bin/kraken-explorer|Exec=kraken-explorer|' kraken-explorer.desktop \
           > AppDir/usr/share/applications/kraken-explorer.desktop
 
     - name: Bundle Python runtime

@@ -307,7 +307,7 @@ def uds_scan(iface: str, physical: bool = False, first: str = "0x700", last: str
 
 @mcp.tool()
 def uds_services(iface: str, tx: str, rx: str, extended: bool = False) -> dict:
-    """Which UDS services the ECU supports (every SID tried, 'service not supported' filtered out)."""
+    """Which read UDS services the ECU supports (19, 22, 23, 24, 3E; writes, resets and routines are never probed)."""
     return call("POST", "/uds/services", {"iface": iface, "tx": tx, "rx": rx, "extended": extended})
 
 
@@ -454,7 +454,7 @@ def trace_filter(text: str | None = None, rx: bool | None = None, tx: bool | Non
 
 @mcp.tool()
 def trace_view(tab: str | None = None, view: str | None = None) -> dict:
-    """Switch the Trace window's tab ("monitor", "uds", "j1939") and/or that tab's view
+    """Switch the Trace window's tab ("monitor", "uds", "j1939", "n2k") and/or that tab's view
     ("monitor" = one row per id, "log" = every frame)."""
     body = {k: v for k, v in {"tab": tab, "view": view}.items() if v is not None}
     return call("POST", "/trace/view", body)

@@ -206,6 +206,11 @@ uint32_t graph_next_color(const GraphState& g)
     return ImGui::ColorConvertFloat4ToU32(ImPlot::GetColormapColor(static_cast<int>(g.signals.size())));
 }
 
+std::string graph_signal_label(const GraphSignal& s)
+{
+    return s.kind == GraphSignalKind::BusLoad ? s.name : s.parent + '.' + s.name;
+}
+
 // Removes signal i and keeps the XY X signal pointing at the same signal.
 void graph_remove_signal(GraphState& g, std::size_t i)
 {
@@ -513,7 +518,8 @@ void draw_signal_list(GraphState& g, std::span<const int> slots)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         }
-        if (ImGui::Selectable(s.name.c_str(), i == g.selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+        const std::string label = graph_signal_label(s);
+        if (ImGui::Selectable(label.c_str(), i == g.selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
         {
             g.selected = i;
         }
@@ -525,11 +531,11 @@ void draw_signal_list(GraphState& g, std::span<const int> slots)
         {
             ImGui::PopStyleColor();
         }
-        ImGui::SetItemTooltip("%s / %s", s.parent.c_str(), s.name.c_str());
+        ImGui::SetItemTooltip("%s", label.c_str()); // the full name when the column clips it
         if (ImGui::BeginDragDropSource())
         {
             ImGui::SetDragDropPayload(drag_payload, &i, sizeof i);
-            ImGui::Text("%s -> drop on a Y axis", s.name.c_str());
+            ImGui::Text("%s -> drop on a Y axis", label.c_str());
             ImGui::EndDragDropSource();
         }
         if (ImGui::BeginPopupContextItem("##signal_menu"))
@@ -588,7 +594,7 @@ void draw_signal_list(GraphState& g, std::span<const int> slots)
         GraphSignal& s = g.signals[static_cast<std::size_t>(stats_sel)];
         update_stats(g, s);
         // One row per value: 5 stat columns next to the signals made the list too wide.
-        ImGui::TextUnformatted(std::format("Statistics: {}", s.name).c_str());
+        ImGui::TextUnformatted(std::format("Statistics: {}", graph_signal_label(s)).c_str());
         if (ImGui::BeginTable("##stats", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH))
         {
             ImGui::TableSetupColumn("##stat", ImGuiTableColumnFlags_WidthFixed);
@@ -661,7 +667,8 @@ void draw_xy(App& app, GraphState& g, const GraphPngOptions* png = nullptr)
     }
     g.x_signal = std::clamp(g.x_signal, 0, static_cast<int>(g.signals.size()) - 1);
     const GraphSignal& xs = g.signals[static_cast<std::size_t>(g.x_signal)];
-    const auto with_unit = [](const GraphSignal& s) { return s.unit.empty() ? s.name : std::format("{} [{}]", s.name, s.unit); };
+    const auto with_unit = [](const GraphSignal& s)
+    { return s.unit.empty() ? graph_signal_label(s) : std::format("{} [{}]", graph_signal_label(s), s.unit); };
     std::string y_label;
     for (std::size_t i = 0; i < g.signals.size(); ++i)
     {
@@ -704,7 +711,7 @@ void draw_xy(App& app, GraphState& g, const GraphPngOptions* png = nullptr)
             continue;
         }
         const ImVec4 color = png_color(png, ImGui::ColorConvertU32ToFloat4(s.color));
-        const std::string label = std::format("{}##{}", s.name, i);
+        const std::string label = std::format("{}##{}", graph_signal_label(s), i);
         ImPlotSpec spec;
         spec.LineColor = color;
         spec.FillColor = color;
@@ -801,7 +808,7 @@ void draw_plots(App& app, GraphState& g, std::span<const int> slots, const Graph
             }
             if (on_axis == 1)
             {
-                label = first->unit.empty() ? first->name : std::format("{} [{}]", first->name, first->unit);
+                label = first->unit.empty() ? graph_signal_label(*first) : std::format("{} [{}]", graph_signal_label(*first), first->unit);
             }
             ImPlotAxisFlags flags = k > 0 ? ImPlotAxisFlags_AuxDefault : ImPlotAxisFlags_None;
             // A file view keeps fitting Y to the visible window: its samples are that window only.
@@ -895,7 +902,7 @@ void draw_plots(App& app, GraphState& g, std::span<const int> slots, const Graph
                 spec.MarkerSize = 2.5f * px;
             }
             spec.LineWeight = 2.5f * px * line_scale;
-            const std::string label = std::format("{}##{}", s.name, i);
+            const std::string label = std::format("{}##{}", graph_signal_label(s), i);
             ImPlot::PlotLine(label.c_str(), dt.data(), dv.data(), static_cast<int>(dt.size()), spec);
             for (int k = 0; g.cursor_on && (png == nullptr || png->cursors) && k < 2; ++k)
             {
@@ -903,7 +910,7 @@ void draw_plots(App& app, GraphState& g, std::span<const int> slots, const Graph
                 if (!std::isnan(y))
                 {
                     ImPlot::Annotation(k == 0 ? g.cursor_a : g.cursor_b, y, color, ImVec2(8.0f * px, -8.0f * px), true,
-                                       "%s: %s %s", s.name.c_str(), graph_format_value(s, y).c_str(), s.unit.c_str());
+                                       "%s: %s %s", graph_signal_label(s).c_str(), graph_format_value(s, y).c_str(), s.unit.c_str());
                 }
             }
         }
@@ -1029,9 +1036,10 @@ void export_csv(const GraphState& g, const std::string& path)
         {
             continue;
         }
+        const std::string label = graph_signal_label(s);
         for (std::size_t i = 0; i < s.t.size(); ++i)
         {
-            out << s.name << ',' << s.unit << ',' << std::format("{:.6f},{:.9g}", s.t[i], s.v[i]) << '\n';
+            out << label << ',' << s.unit << ',' << std::format("{:.6f},{:.9g}", s.t[i], s.v[i]) << '\n';
         }
     }
     if (!out)
@@ -1155,7 +1163,7 @@ std::string png_auto_title(const GraphState& g)
     {
         if (!s.hidden)
         {
-            t += (t.empty() ? "" : ", ") + s.name;
+            t += (t.empty() ? "" : ", ") + graph_signal_label(s);
         }
     }
     return t.empty() ? std::string("Graph") : t;

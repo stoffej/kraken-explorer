@@ -220,6 +220,10 @@ void draw_macro(App& app, Macros& macros, Macro& m)
             // A new frame goes where the one before it went.
             const auto prev = std::ranges::find(m.steps.rbegin(), m.steps.rend(), MacroStepKind::Send, &MacroStep::kind);
             step.frame.iface = prev != m.steps.rend() ? prev->frame.iface : (app.ifaces.empty() ? UINT16_MAX : uint16_t{0});
+            if (iface_rx_extended(app, step.frame.iface).value_or(false))
+            {
+                step.frame.flags |= bus_flag::extended;
+            }
             m.steps.push_back(std::move(step));
         }
     }

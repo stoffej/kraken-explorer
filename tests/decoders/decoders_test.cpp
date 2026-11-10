@@ -405,3 +405,52 @@ TEST_CASE("protocol reset drops pending reassembly")
     protocol_reset(d);
     CHECK(protocol_decode(d, uds_cf(), out) == DecodeStatus::Ignored);
 }
+
+TEST_CASE("n2k single frame vessel heading decodes fields")
+{
+    N2kDecoder d;
+    ProtocolMessage out;
+    // Prio 2, PGN 127250 (0x1F112), SA 0x80: SID 1, heading 1.5708 rad, deviation / variation n/a, magnetic.
+    REQUIRE(n2k_decode(d, frame(0x09F11280, {0x01, 0x5C, 0x3D, 0xFF, 0x7F, 0xFF, 0x7F, 0xFD}, {.extended = true}), out)
+            == DecodeStatus::Completed);
+    CHECK(out.protocol == "N2K");
+    CHECK(out.id == 127250u);
+    CHECK(out.name == "Vessel Heading");
+    CHECK(out.metadata["Source Address"] == 0x80u);
+    CHECK(out.metadata["Priority"] == 2u);
+    CHECK(out.description == "SID 1  heading 90.00°  deviation n/a  variation n/a  ref Magnetic");
+}
+
+TEST_CASE("n2k fast packet reassembly")
+{
+    N2kDecoder d;
+    ProtocolMessage out;
+    // PGN 129542 (0x1FA06) from SA 0x80, 15 bytes in three frames, sequence counter 1.
+    const uint32_t id = 0x19FA0680;
+    CHECK(n2k_decode(d, frame(id, {0x20, 15, 7, 0x64, 0, 0xC8, 0, 0x2C}, {.extended = true}), out) == DecodeStatus::Consumed);
+    CHECK(n2k_decode(d, frame(id, {0x21, 0x01, 0, 0, 0x64, 0, 0xC8, 0}, {.extended = true}), out) == DecodeStatus::Consumed);
+    REQUIRE(n2k_decode(d, frame(id, {0x22, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, {.extended = true}), out)
+            == DecodeStatus::Completed);
+    CHECK(out.name == "GNSS Pseudorange Noise Statistics");
+    CHECK(out.payload.size() == 15);
+    CHECK(out.raw_frames.size() == 3);
+    CHECK(out.description == "SID 7  RMS 1.00 m  std major 2.00 m  minor 3.00 m  orientation 0.00°  std lat 1.00 m  lon 2.00 m  alt n/a");
+}
+
+TEST_CASE("n2k fast packet with a lost frame is dropped")
+{
+    N2kDecoder d;
+    ProtocolMessage out;
+    const uint32_t id = 0x19FA0680;
+    CHECK(n2k_decode(d, frame(id, {0x20, 15, 7, 0x64, 0, 0xC8, 0, 0x2C}, {.extended = true}), out) == DecodeStatus::Consumed);
+    CHECK(n2k_decode(d, frame(id, {0x22, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, {.extended = true}), out) == DecodeStatus::Ignored);
+    CHECK(d.sessions.empty());
+}
+
+TEST_CASE("n2k leaves data page 0 PGNs to J1939")
+{
+    N2kDecoder d;
+    ProtocolMessage out;
+    CHECK(n2k_decode(d, frame(0x18FEEF01, {0, 1, 2, 3, 4, 5, 6, 7}, {.extended = true}), out) == DecodeStatus::Ignored);
+    CHECK(n2k_decode(d, frame(0x123, {0, 1, 2, 3}), out) == DecodeStatus::Ignored);
+}

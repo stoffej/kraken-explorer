@@ -45,7 +45,7 @@ curl -fsSL -o "$SHARE/kraken-explorer/kraken_mcp.py" "$RAW/scripts/kraken_mcp.py
 for f in tentacle_sim.py tentacle.dbc; do
     curl -fsSL -o "$SHARE/kraken-explorer/examples/$f" "$RAW/examples/$f"
 done
-curl -fsSL "$RAW/kraken-explorer.desktop" | sed "s|^Exec=.*|Exec=$APP %f|" > "$SHARE/applications/kraken-explorer.desktop"
+curl -fsSL "$RAW/kraken-explorer.desktop" | sed "s|^Exec=.*|Exec=$APP --api 8321 %f|" > "$SHARE/applications/kraken-explorer.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$SHARE/applications" 2>/dev/null || true
 
 # SocketCAN link control: the polkit rule lets members of netdev run the app's `ip link` lines.

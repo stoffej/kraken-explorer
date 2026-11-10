@@ -208,6 +208,12 @@ void draw_script_window(App& app, ScriptWindowState& s, const WorkspaceTab& tab)
     {
         python_console_clear(py);
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Copy output"))
+    {
+        ImGui::SetClipboardText(s.console_text.c_str());
+    }
+    ImGui::SetItemTooltip("The whole console to the clipboard (a part: select it in the console, Ctrl+C)");
     ImGui::TextDisabled("%s", s.file_path.empty() ? "No script loaded" : s.file_path.c_str());
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();

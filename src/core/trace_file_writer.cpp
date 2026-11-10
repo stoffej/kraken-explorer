@@ -74,7 +74,6 @@ struct MdfChannel
     uint64_t unit_offset = 0;
 };
 
-constexpr uint32_t mdf_record_size = 8 + 4 + 1 + 1 + 64;  // t, CAN_ID, DLC, Dir, DataBytes
 
 [[nodiscard]] int64_t now_ns()
 {
@@ -263,189 +262,13 @@ void write_vector_mdf(std::ostream& out, const Frames& messages)
         write_vector_mdf(out, std::span<const BusMessage>(sorted));
         return;
     }
-
-    // Block sizes follow the ASAM MDF 4.1 block definitions: 24-byte common
-    // header, 8 bytes per link, then the block's data section.
-    constexpr uint64_t sz_id = 64;
-    constexpr uint64_t sz_hd = 104;  // 6 links + 32 data
-    constexpr uint64_t sz_fh = 56;   // 2 links + 16 data
-    constexpr uint64_t sz_dg = 64;   // 4 links + 8 data
-    constexpr uint64_t sz_cg = 104;  // 6 links + 32 data
-    constexpr uint64_t sz_cn = 160;  // 8 links + 72 data
-
-    const auto record_count = static_cast<uint64_t>(messages.size());
-    // Microsecond resolution, as the trace timestamps always had.
-    const uint64_t start_time_ns = messages.empty()
-        ? static_cast<uint64_t>(now_ns() / 1000000) * 1000000
-        : static_cast<uint64_t>(messages.front().ts_ns / 1000) * 1000;
-    const int64_t t_start_ns = messages.empty() ? 0 : messages.front().ts_ns;
-
-    // The file history comment must be an MDBLOCK with <FHcomment>.
-    const std::string fh_comment =
-        std::string("<FHcomment xmlns=\"http://www.asam.net/mdf/v4\"><TX>Kraken Explorer trace export</TX>"
-                    "<tool_id>Kraken Explorer</tool_id><tool_vendor>Kraken Explorer</tool_vendor><tool_version>")
-        + VERSION_STRING + "</tool_version></FHcomment>";
-    constexpr std::string_view acquisition_name = "CAN";
-
-    std::array<MdfChannel, 5> channels = {{
-        { "t",         "s", 2, 1, 4,  0,  64  },
-        { "CAN_ID",    "",  0, 0, 0,  8,  32  },
-        { "DLC",       "",  0, 0, 0,  12, 8   },
-        { "Dir",       "",  0, 0, 0,  13, 8   },
-        { "DataBytes", "",  0, 0, 10, 14, 512 },
-    }};
-
-    // --- Block offsets ---
-    uint64_t off = sz_id + sz_hd;
-    const uint64_t o_fh = off;      off += sz_fh;
-    const uint64_t o_md_fh = off;   off += mdf_text_block_size(fh_comment);
-    const uint64_t o_dg = off;      off += sz_dg;
-    const uint64_t o_cg = off;      off += sz_cg;
-    const uint64_t o_tx_cg = off;   off += mdf_text_block_size(acquisition_name);
-    for (MdfChannel& ch : channels)
-    {
-        ch.offset = off;            off += sz_cn;
-        ch.name_offset = off;       off += mdf_text_block_size(ch.name);
-        if (!ch.unit.empty())
-        {
-            ch.unit_offset = off;   off += mdf_text_block_size(ch.unit);
-        }
-    }
-    const uint64_t o_dt = off;
-
+    const int64_t t_start_ns = messages.empty() ? now_ns() / 1000000 * 1000000 : messages.front().ts_ns;
     std::vector<uint8_t> b;
-
-    auto zeros = [&b](size_t count) { b.insert(b.end(), count, 0); };
-    auto block_header = [&b](std::string_view id, uint64_t length, uint64_t link_count)
-    {
-        append_raw(b, id);
-        append_le(b, uint32_t{0});  // reserved
-        append_le(b, length);
-        append_le(b, link_count);
-    };
-    auto text_block = [&](std::string_view id, std::string_view text)
-    {
-        const uint64_t size = mdf_text_block_size(text);
-        block_header(id, size, 0);
-        append_raw(b, text);
-        zeros(static_cast<size_t>(size - 24 - text.size()));  // NUL terminator + padding
-    };
-
-    // ===== IDBLOCK (no common header) =====
-    append_raw(b, "MDF     ");
-    append_raw(b, "4.10    ");
-    append_raw(b, "Kraken  ");  // id_prog: 8 chars, space padded
-    zeros(4);                        // id_reserved1
-    append_le(b, uint16_t{410});     // id_ver
-    zeros(30);                       // id_reserved2
-    append_le(b, uint16_t{0});       // id_unfin_flags: finalized
-    append_le(b, uint16_t{0});       // id_custom_unfin_flags
-
-    // ===== HDBLOCK =====
-    block_header("##HD", sz_hd, 6);
-    append_le(b, o_dg);              // hd_dg_first
-    append_le(b, o_fh);              // hd_fh_first
-    append_le(b, uint64_t{0});       // hd_ch_first
-    append_le(b, uint64_t{0});       // hd_at_first
-    append_le(b, uint64_t{0});       // hd_ev_first
-    append_le(b, uint64_t{0});       // hd_md_comment
-    append_le(b, start_time_ns);     // hd_start_time_ns (UTC)
-    append_le(b, int16_t{0});        // hd_tz_offset_min
-    append_le(b, int16_t{0});        // hd_dst_offset_min
-    append_le(b, uint8_t{0});        // hd_time_flags: UTC, offsets not valid
-    append_le(b, uint8_t{0});        // hd_time_class: local PC reference time
-    append_le(b, uint8_t{0});        // hd_flags: start angle / distance not valid
-    append_le(b, uint8_t{0});        // hd_reserved
-    append_le(b, 0.0);               // hd_start_angle_rad
-    append_le(b, 0.0);               // hd_start_distance_m
-
-    // ===== FHBLOCK =====
-    block_header("##FH", sz_fh, 2);
-    append_le(b, uint64_t{0});       // fh_fh_next
-    append_le(b, o_md_fh);           // fh_md_comment
-    append_le(b, start_time_ns);     // fh_time_ns
-    append_le(b, int16_t{0});        // fh_tz_offset_min
-    append_le(b, int16_t{0});        // fh_dst_offset_min
-    append_le(b, uint8_t{0});        // fh_time_flags
-    zeros(3);                        // fh_reserved
-    text_block("##MD", fh_comment);
-
-    // ===== DGBLOCK =====
-    block_header("##DG", sz_dg, 4);
-    append_le(b, uint64_t{0});       // dg_dg_next
-    append_le(b, o_cg);              // dg_cg_first
-    append_le(b, o_dt);              // dg_data
-    append_le(b, uint64_t{0});       // dg_md_comment
-    append_le(b, uint8_t{0});        // dg_rec_id_size: single channel group
-    zeros(7);                        // dg_reserved
-
-    // ===== CGBLOCK =====
-    block_header("##CG", sz_cg, 6);
-    append_le(b, uint64_t{0});       // cg_cg_next
-    append_le(b, channels[0].offset);// cg_cn_first
-    append_le(b, o_tx_cg);           // cg_tx_acq_name
-    append_le(b, uint64_t{0});       // cg_si_acq_source
-    append_le(b, uint64_t{0});       // cg_sr_first
-    append_le(b, uint64_t{0});       // cg_md_comment
-    append_le(b, uint64_t{0});       // cg_record_id
-    append_le(b, record_count);      // cg_cycle_count
-    append_le(b, uint16_t{0});       // cg_flags
-    append_le(b, uint16_t{0});       // cg_path_separator
-    zeros(4);                        // cg_reserved
-    append_le(b, mdf_record_size);   // cg_data_bytes
-    append_le(b, uint32_t{0});       // cg_inval_bytes
-    text_block("##TX", acquisition_name);
-
-    // ===== CNBLOCKs =====
-    for (size_t i = 0; i < channels.size(); ++i)
-    {
-        const MdfChannel& ch = channels[i];
-        block_header("##CN", sz_cn, 8);
-        append_le(b, i + 1 < channels.size() ? channels[i + 1].offset : uint64_t{0});  // cn_cn_next
-        append_le(b, uint64_t{0});   // cn_composition
-        append_le(b, ch.name_offset);// cn_tx_name
-        append_le(b, uint64_t{0});   // cn_si_source
-        append_le(b, uint64_t{0});   // cn_cc_conversion
-        append_le(b, uint64_t{0});   // cn_data
-        append_le(b, ch.unit_offset);// cn_md_unit
-        append_le(b, uint64_t{0});   // cn_md_comment
-        append_le(b, ch.type);
-        append_le(b, ch.sync_type);
-        append_le(b, ch.data_type);
-        append_le(b, uint8_t{0});    // cn_bit_offset
-        append_le(b, ch.byte_offset);
-        append_le(b, ch.bit_count);
-        append_le(b, uint32_t{0});   // cn_flags: ranges and limits not valid
-        append_le(b, uint32_t{0});   // cn_inval_bit_pos
-        append_le(b, uint8_t{0});    // cn_precision
-        append_le(b, uint8_t{0});    // cn_reserved
-        append_le(b, uint16_t{0});   // cn_attachment_count
-        for (int k = 0; k < 6; ++k)
-        {
-            append_le(b, 0.0);       // value range, limit, extended limit
-        }
-        text_block("##TX", ch.name);
-        if (!ch.unit.empty())
-        {
-            text_block("##TX", ch.unit);
-        }
-    }
-
-    // ===== DTBLOCK =====
-    block_header("##DT", 24 + record_count * mdf_record_size, 0);
+    (void)append_mdf_header(b, t_start_ns, static_cast<uint64_t>(messages.size()), false);
     write_bytes(out, b);
     write_records(out, messages, [&](std::vector<uint8_t>& r, const BusMessage& m, std::size_t)
     {
-        const uint8_t len = std::min<uint8_t>(m.len, 64);
-        // canid_t as in <linux/can.h>: standard and extended frames with the same
-        // number stay distinct, error frames keep their error class.
-        // Microsecond resolution, as the trace timestamps always had.
-        append_le(r, static_cast<double>(m.ts_ns / 1000 - t_start_ns / 1000) / 1e6);
-        append_le(r, socket_can::frame_id(m));
-        append_le(r, len);
-        append_le(r, uint8_t{has_flag(m, bus_flag::tx) ? uint8_t{1} : uint8_t{0}});
-        r.insert(r.end(), m.data.begin(), m.data.begin() + len);
-        r.resize(r.size() + 64 - len);
+        append_mdf_record(r, m, t_start_ns);
     });
 }
 
@@ -689,6 +512,214 @@ struct WriteStopped
 };
 
 } // namespace
+
+MdfLayout append_mdf_header(std::vector<uint8_t>& out, int64_t start_ns, uint64_t record_count, bool unfinalized)
+{
+    MdfLayout layout;
+    // Block sizes follow the ASAM MDF 4.1 block definitions: 24-byte common
+    // header, 8 bytes per link, then the block's data section.
+    constexpr uint64_t sz_id = 64;
+    constexpr uint64_t sz_hd = 104;  // 6 links + 32 data
+    constexpr uint64_t sz_fh = 56;   // 2 links + 16 data
+    constexpr uint64_t sz_dg = 64;   // 4 links + 8 data
+    constexpr uint64_t sz_cg = 104;  // 6 links + 32 data
+    constexpr uint64_t sz_cn = 160;  // 8 links + 72 data
+
+    // Microsecond resolution, as the trace timestamps always had.
+    const auto start_time_ns = static_cast<uint64_t>(start_ns / 1000) * 1000;
+
+    // The file history comment must be an MDBLOCK with <FHcomment>.
+    const std::string fh_comment =
+        std::string("<FHcomment xmlns=\"http://www.asam.net/mdf/v4\"><TX>Kraken Explorer trace export</TX>"
+                    "<tool_id>Kraken Explorer</tool_id><tool_vendor>Kraken Explorer</tool_vendor><tool_version>")
+        + VERSION_STRING + "</tool_version></FHcomment>";
+    constexpr std::string_view acquisition_name = "CAN";
+
+    std::array<MdfChannel, 5> channels = {{
+        { "t",         "s", 2, 1, 4,  0,  64  },
+        { "CAN_ID",    "",  0, 0, 0,  8,  32  },
+        { "DLC",       "",  0, 0, 0,  12, 8   },
+        { "Dir",       "",  0, 0, 0,  13, 8   },
+        { "DataBytes", "",  0, 0, 10, 14, 512 },
+    }};
+
+    // --- Block offsets ---
+    uint64_t off = sz_id + sz_hd;
+    const uint64_t o_fh = off;      off += sz_fh;
+    const uint64_t o_md_fh = off;   off += mdf_text_block_size(fh_comment);
+    const uint64_t o_dg = off;      off += sz_dg;
+    const uint64_t o_cg = off;      off += sz_cg;
+    const uint64_t o_tx_cg = off;   off += mdf_text_block_size(acquisition_name);
+    for (MdfChannel& ch : channels)
+    {
+        ch.offset = off;            off += sz_cn;
+        ch.name_offset = off;       off += mdf_text_block_size(ch.name);
+        if (!ch.unit.empty())
+        {
+            ch.unit_offset = off;   off += mdf_text_block_size(ch.unit);
+        }
+    }
+    const uint64_t o_dt = off;
+
+    std::vector<uint8_t>& b = out;
+    const std::size_t base = b.size();
+
+    auto zeros = [&b](size_t count) { b.insert(b.end(), count, 0); };
+    auto block_header = [&b](std::string_view id, uint64_t length, uint64_t link_count)
+    {
+        append_raw(b, id);
+        append_le(b, uint32_t{0});  // reserved
+        append_le(b, length);
+        append_le(b, link_count);
+    };
+    auto text_block = [&](std::string_view id, std::string_view text)
+    {
+        const uint64_t size = mdf_text_block_size(text);
+        block_header(id, size, 0);
+        append_raw(b, text);
+        zeros(static_cast<size_t>(size - 24 - text.size()));  // NUL terminator + padding
+    };
+
+    // ===== IDBLOCK (no common header) =====
+    append_raw(b, unfinalized ? "UnFinMF " : "MDF     ");
+    append_raw(b, "4.10    ");
+    append_raw(b, "Kraken  ");  // id_prog: 8 chars, space padded
+    zeros(4);                        // id_reserved1
+    append_le(b, uint16_t{410});     // id_ver
+    zeros(30);                       // id_reserved2
+    append_le(b, uint16_t{unfinalized ? mdf_unfin_flags : uint16_t{0}}); // id_unfin_flags
+    append_le(b, uint16_t{0});       // id_custom_unfin_flags
+
+    // ===== HDBLOCK =====
+    block_header("##HD", sz_hd, 6);
+    append_le(b, o_dg);              // hd_dg_first
+    append_le(b, o_fh);              // hd_fh_first
+    append_le(b, uint64_t{0});       // hd_ch_first
+    append_le(b, uint64_t{0});       // hd_at_first
+    append_le(b, uint64_t{0});       // hd_ev_first
+    append_le(b, uint64_t{0});       // hd_md_comment
+    append_le(b, start_time_ns);     // hd_start_time_ns (UTC)
+    append_le(b, int16_t{0});        // hd_tz_offset_min
+    append_le(b, int16_t{0});        // hd_dst_offset_min
+    append_le(b, uint8_t{0});        // hd_time_flags: UTC, offsets not valid
+    append_le(b, uint8_t{0});        // hd_time_class: local PC reference time
+    append_le(b, uint8_t{0});        // hd_flags: start angle / distance not valid
+    append_le(b, uint8_t{0});        // hd_reserved
+    append_le(b, 0.0);               // hd_start_angle_rad
+    append_le(b, 0.0);               // hd_start_distance_m
+
+    // ===== FHBLOCK =====
+    block_header("##FH", sz_fh, 2);
+    append_le(b, uint64_t{0});       // fh_fh_next
+    append_le(b, o_md_fh);           // fh_md_comment
+    append_le(b, start_time_ns);     // fh_time_ns
+    append_le(b, int16_t{0});        // fh_tz_offset_min
+    append_le(b, int16_t{0});        // fh_dst_offset_min
+    append_le(b, uint8_t{0});        // fh_time_flags
+    zeros(3);                        // fh_reserved
+    text_block("##MD", fh_comment);
+
+    // ===== DGBLOCK =====
+    block_header("##DG", sz_dg, 4);
+    append_le(b, uint64_t{0});       // dg_dg_next
+    append_le(b, o_cg);              // dg_cg_first
+    append_le(b, o_dt);              // dg_data
+    append_le(b, uint64_t{0});       // dg_md_comment
+    append_le(b, uint8_t{0});        // dg_rec_id_size: single channel group
+    zeros(7);                        // dg_reserved
+
+    // ===== CGBLOCK =====
+    block_header("##CG", sz_cg, 6);
+    append_le(b, uint64_t{0});       // cg_cg_next
+    append_le(b, channels[0].offset);// cg_cn_first
+    append_le(b, o_tx_cg);           // cg_tx_acq_name
+    append_le(b, uint64_t{0});       // cg_si_acq_source
+    append_le(b, uint64_t{0});       // cg_sr_first
+    append_le(b, uint64_t{0});       // cg_md_comment
+    append_le(b, uint64_t{0});       // cg_record_id
+    layout.cycle_count_at = b.size() - base;
+    append_le(b, record_count);      // cg_cycle_count
+    append_le(b, uint16_t{0});       // cg_flags
+    append_le(b, uint16_t{0});       // cg_path_separator
+    zeros(4);                        // cg_reserved
+    append_le(b, mdf_record_size);   // cg_data_bytes
+    append_le(b, uint32_t{0});       // cg_inval_bytes
+    text_block("##TX", acquisition_name);
+
+    // ===== CNBLOCKs =====
+    for (size_t i = 0; i < channels.size(); ++i)
+    {
+        const MdfChannel& ch = channels[i];
+        block_header("##CN", sz_cn, 8);
+        append_le(b, i + 1 < channels.size() ? channels[i + 1].offset : uint64_t{0});  // cn_cn_next
+        append_le(b, uint64_t{0});   // cn_composition
+        append_le(b, ch.name_offset);// cn_tx_name
+        append_le(b, uint64_t{0});   // cn_si_source
+        append_le(b, uint64_t{0});   // cn_cc_conversion
+        append_le(b, uint64_t{0});   // cn_data
+        append_le(b, ch.unit_offset);// cn_md_unit
+        append_le(b, uint64_t{0});   // cn_md_comment
+        append_le(b, ch.type);
+        append_le(b, ch.sync_type);
+        append_le(b, ch.data_type);
+        append_le(b, uint8_t{0});    // cn_bit_offset
+        append_le(b, ch.byte_offset);
+        append_le(b, ch.bit_count);
+        append_le(b, uint32_t{0});   // cn_flags: ranges and limits not valid
+        append_le(b, uint32_t{0});   // cn_inval_bit_pos
+        append_le(b, uint8_t{0});    // cn_precision
+        append_le(b, uint8_t{0});    // cn_reserved
+        append_le(b, uint16_t{0});   // cn_attachment_count
+        for (int k = 0; k < 6; ++k)
+        {
+            append_le(b, 0.0);       // value range, limit, extended limit
+        }
+        text_block("##TX", ch.name);
+        if (!ch.unit.empty())
+        {
+            text_block("##TX", ch.unit);
+        }
+    }
+
+    // ===== DTBLOCK =====
+    layout.dt_length_at = b.size() - base + 8;
+    block_header("##DT", 24 + (unfinalized ? 0 : record_count * mdf_record_size), 0);
+    return layout;
+}
+
+void append_mdf_record(std::vector<uint8_t>& r, const BusMessage& m, int64_t start_ns)
+{
+    const uint8_t len = std::min<uint8_t>(m.len, 64);
+    // canid_t as in <linux/can.h>: standard and extended frames with the same
+    // number stay distinct, error frames keep their error class.
+    // Microsecond resolution, as the trace timestamps always had.
+    append_le(r, static_cast<double>(m.ts_ns / 1000 - start_ns / 1000) / 1e6);
+    append_le(r, socket_can::frame_id(m));
+    append_le(r, len);
+    append_le(r, uint8_t{has_flag(m, bus_flag::tx) ? uint8_t{1} : uint8_t{0}});
+    r.insert(r.end(), m.data.begin(), m.data.begin() + len);
+    r.resize(r.size() + 64 - len);
+}
+
+bool mdf_finalize(std::ostream& out, const MdfLayout& layout, uint64_t record_count)
+{
+    std::vector<uint8_t> b;
+    const auto patch = [&](uint64_t at, auto value)
+    {
+        b.clear();
+        append_le(b, value);
+        out.seekp(static_cast<std::streamoff>(at));
+        write_bytes(out, b);
+    };
+    const auto end = out.tellp();
+    out.seekp(0);
+    out.write("MDF     ", 8);
+    patch(60, uint16_t{0}); // id_unfin_flags
+    patch(layout.cycle_count_at, record_count);
+    patch(layout.dt_length_at, uint64_t{24} + record_count * mdf_record_size);
+    out.seekp(end);
+    return static_cast<bool>(out);
+}
 
 void write_trace_file(std::ostream& out, TraceFileFormat format, std::span<const BusMessage> messages,
                       const IfaceNameFn& iface_name)

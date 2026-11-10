@@ -73,6 +73,7 @@ struct Recorder
     std::chrono::local_seconds session_start{};
     std::map<uint16_t, int> channels;              // ASC channel per interface, stable across parts
     std::map<uint16_t, uint32_t> pcap_interfaces;  // IDB index per interface in the current file
+    MdfLayout mdf;                                 // MF4: what finish_file patches to finalize
     int64_t file_start_ns = 0;
     int file_index = 0;
     int64_t file_bytes = 0;
@@ -84,7 +85,7 @@ struct Recorder
 [[nodiscard]] constexpr bool recorder_format_supported(TraceFileFormat format) noexcept
 {
     return format == TraceFileFormat::VectorAsc || format == TraceFileFormat::CanDump
-        || format == TraceFileFormat::PcapNg || format == TraceFileFormat::Trc;
+        || format == TraceFileFormat::PcapNg || format == TraceFileFormat::Trc || format == TraceFileFormat::VectorMdf;
 }
 
 // File name (without folder) of part `index` (1-based) of a recording that

@@ -13,7 +13,7 @@ build/src/kraken-explorer               # settings: ~/.config/kraken-explorer/kr
 ctest --test-dir build --output-on-failure
 ```
 
-Options: `-DKRAKEN_SANITIZE=ON` (ASan+UBSan, what CI runs), `-DKRAKEN_TESTS=OFF`, `-DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF` (headless: build + ctest only). Default build type is RelWithDebInfo. Local heavy work (build, ctest, smoke) runs as `taskset -c 2-11 nice -n 10` with at most `-j2`, one build at a time: two of the twelve cores stay free. System deps (apt list) are in `docs/manual.md`.
+Options: `-DKRAKEN_SANITIZE=ON` (ASan+UBSan, what CI runs), `-DKRAKEN_TESTS=OFF`, `-DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF` (headless: build + ctest only). Default build type is RelWithDebInfo. ccache is used automatically when installed. Build in Docker so every machine gets the same toolchain: `scripts/build_docker.sh` (pinned `.devcontainer` image, `build-dc/`, `nice -n 10`, `-j$(nproc)` by default, `JOBS` overrides, ccache in the host's `~/.cache/ccache` so it survives between builds); `scripts/build_docker.sh ctest --test-dir build-dc --output-on-failure` for the tests. One build at a time. System deps (apt list) are in `docs/manual.md`.
 
 Tests: one doctest binary per `tests/<area>/<area>_test.cpp`, auto-discovered by glob, ctest name `<area>`, binary `build/tests/<area>/<area>_test`. A new area needs no CMake unless it has data files or defines (then `tests/<area>/CMakeLists.txt`, listed in `tests/CMakeLists.txt`).
 
@@ -50,4 +50,6 @@ Static libraries under `src/`, each `src/<module>/CMakeLists.txt`, includes root
 
 - Code style is free-function C++, Allman braces, 4 spaces. Comments explain why, and deliberate simplifications are marked `// ponytail: <ceiling>, <upgrade path>` so they can be found later.
 - New source files carry the GPL header from `gpl-header.txt`.
+- No GPL/LGPL/AGPL code, not even reading it.
+- Independent: never copy another product's code, icons, text or templates; never drive or take data from commercial CAN programs.
 - `kraken_tasks` and `kraken_db` require C++23 (`std::move_only_function`, `std::expected`) and export it `PUBLIC`, so everything linking them (`kraken_ui`, the tests) also compiles as C++23; `kraken_core` and `kraken_decoders` stay C++20.

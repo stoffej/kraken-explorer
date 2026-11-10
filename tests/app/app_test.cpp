@@ -14,6 +14,7 @@
 
 #include "app.h"
 #include "drivers/driver.h"
+#include "ui/raw_tx.h"
 #include "ui_test.h"
 
 namespace
@@ -84,4 +85,20 @@ TEST_CASE("the refused start shows the Cannot start measurement modal until clos
     CHECK(ImGui::IsPopupOpen("Cannot start measurement"));
     draw_measurement_error(app);
     ImGui::EndFrame();
+}
+
+TEST_CASE("the id width the frame editors pre-select follows the received traffic")
+{
+    App app;
+    CHECK_FALSE(iface_rx_extended(app, 1).has_value()); // nothing received: no suggestion
+    BusMessage ext{.id = 0x0EFF0080, .flags = bus_flag::extended, .iface = 1};
+    BusMessage std11{.id = 0x100, .iface = 1};
+    BusMessage tx_echo{.id = 0x200, .flags = bus_flag::tx, .iface = 1};
+    app.rx_scratch = {ext, ext, std11, tx_echo, tx_echo}; // own TX echoes do not count
+    rx_id_width_update(app);
+    CHECK(iface_rx_extended(app, 1) == true);
+    CHECK_FALSE(iface_rx_extended(app, 0).has_value());
+    app.rx_scratch = {std11, std11};
+    rx_id_width_update(app);
+    CHECK(iface_rx_extended(app, 1) == false); // 2 x 29-bit vs 3 x 11-bit
 }
