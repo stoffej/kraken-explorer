@@ -59,6 +59,7 @@ void settings_ini_write(const App& app, std::string& out)
     line("ui/font_scale", app.settings.font_scale_pct);
     line("update/check", app.settings.update_check ? 1 : 0);
     line("uds/addr_ext", app.settings.uds_addr_ext ? 1 : 0);
+    line("n2k/enabled", app.settings.n2k ? 1 : 0);
     line("uds/fd", app.uds.fd ? 1 : 0);
     line("uds/brs", app.uds.brs ? 1 : 0);
     line("uds/txlen", app.uds.tx_len_idx);
@@ -129,6 +130,10 @@ void settings_ini_read_line(App& app, std::string_view line)
     else if (key == "uds/addr_ext")
     {
         app.settings.uds_addr_ext = value == "1";
+    }
+    else if (key == "n2k/enabled")
+    {
+        app.settings.n2k = value == "1";
     }
     else if (key == "uds/fd")
     {

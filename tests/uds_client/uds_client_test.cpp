@@ -431,7 +431,8 @@ TEST_CASE("sweep: 11-bit range finds nodes, stop ends it, 29-bit is exact")
 
     ecu.on_frame = [](Ecu& e, const BusMessage& m)
     {
-        if (m.id == 0x18DA10F1) e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true);
+        // Only a proper single frame (PCI 02, then 3E 00) is answered.
+        if (m.id == 0x18DA10F1 && m.data[0] == 0x02 && m.data[1] == 0x3E) e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true);
     };
     UdsSweep sw29;
     sw29.transport.extended = true;
@@ -447,22 +448,26 @@ TEST_CASE("sweep: 11-bit range finds nodes, stop ends it, 29-bit is exact")
     CHECK(uds_sweep(ecu.client, ecu.send(), sw, {}, &stop).empty());
 }
 
-TEST_CASE("service scan: not-supported vs supported")
+TEST_CASE("service scan: not-supported vs supported, reads only")
 {
     Ecu ecu;
-    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    std::vector<uint8_t> sent;
+    ecu.on_frame = [&sent](Ecu& e, const BusMessage& m)
     {
         const uint8_t sid = m.data[1];
+        sent.push_back(sid);
         if (sid == 0x22) e.reply(0x7E8, {0x03, 0x62, 0x00, 0x00});
-        else if (sid == 0x27) e.reply(0x7E8, {0x03, 0x7F, 0x27, 0x33});
+        else if (sid == 0x19) e.reply(0x7E8, {0x03, 0x7F, 0x19, 0x12});
         else e.reply(0x7E8, {0x03, 0x7F, sid, 0x11});
     };
     const auto probes = uds_service_scan(ecu.client, ecu.send(), engine, quick);
     const auto by = [&](uint8_t s) { return *std::ranges::find(probes, s, &UdsServiceProbe::sid); };
     CHECK(by(0x22).supported());
-    CHECK(by(0x27).supported());
-    CHECK(!by(0x10).supported());
-    CHECK(by(0x10).answered);
+    CHECK(by(0x19).supported());
+    CHECK(!by(0x23).supported());
+    CHECK(by(0x23).answered);
+    // Nothing that writes, resets or runs anything is sent.
+    CHECK(sent == std::vector<uint8_t>{0x19, 0x22, 0x23, 0x24, 0x3E});
 }
 
 TEST_CASE("DID scan collects positive answers, skips out-of-range")

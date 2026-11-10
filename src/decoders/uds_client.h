@@ -141,8 +141,9 @@ struct UdsSweep
                                                     const std::function<void(const struct UdsEcu&)>& on_found = {},
                                                     const std::atomic<bool>* stop = nullptr);
 
-// Which services an ECU knows: every SID of ISO 14229-1 is sent alone (no sub-function, nothing
-// happens); NRC 0x11 means not supported, every other answer that it is.
+// Which read services an ECU knows (19, 22, 23, 24, 3E; writes, resets, routines and downloads
+// are never probed, a probe must not change the ECU); NRC 0x11 means not supported, every other
+// answer that it is.
 struct UdsServiceProbe
 {
     uint8_t sid = 0;

@@ -370,23 +370,113 @@ void service_scan(App& app, UdsWindow& w, UdsTarget t)
     });
 }
 
-void did_scan(App& app, UdsWindow& w, UdsTarget t, uint16_t first, uint16_t last)
+// target_info: the answers also go to w.target_info (the DID tab's Read target info).
+void did_scan(App& app, UdsWindow& w, UdsTarget t, uint16_t first, uint16_t last, bool target_info = false)
 {
     w.cancel.store(false);
+    if (target_info)
+    {
+        const std::scoped_lock lock(w.mutex);
+        w.target_info.clear();
+    }
     const UdsTiming timing = timing_of(w);
-    post(app, w, [&app, &w, t, first, last, timing]
+    post(app, w, [&app, &w, t, first, last, timing, target_info]
     {
         const auto send = [&app](const BusMessage& m) { return uds_send(app, m); };
         log_line(app, w, std::format("{}  DIDs {:04X}..{:04X} >>", target_text(t), first, last));
-        const auto on_found = [&app, &w](const UdsDidValue& v)
+        const auto on_found = [&app, &w, target_info](const UdsDidValue& v)
         {
             const std::string_view nm = uds_did_name(v.did);
             log_line(app, w, std::format("   {:04X}{} = {}  \"{}\"", v.did, nm.empty() ? "" : std::format(" {}", nm),
                                          format_hex_bytes(v.data), ascii_of(v.data)));
+            if (target_info)
+            {
+                const std::scoped_lock lock(w.mutex);
+                w.target_info.push_back(v);
+            }
         };
         const auto dids = uds_did_scan(app.uds_client, send, t, first, last, timing, on_found, &w.cancel);
         log_line(app, w, w.cancel.load() ? "   stopped" : std::format("   done, {} DID(s)", dids.size()));
     });
+}
+
+// A DID value as text ('.' for the odd binary byte) when at least half of it is printable
+// characters, hex otherwise (also when it is only padding: blanks, 00, FF).
+std::string did_value_text(std::span<const uint8_t> data)
+{
+    const auto text = std::ranges::count_if(data, [](uint8_t c) { return c > 0x20 && c < 0x7F; });
+    if (text == 0 || text * 2 < static_cast<std::ptrdiff_t>(data.size()))
+    {
+        return format_hex_bytes(data);
+    }
+    return std::string(trim(ascii_of(data)));
+}
+
+// Right half of the DID tab: Read, then DID / name / value of every identification DID answered.
+void draw_target_info(App& app, UdsWindow& w)
+{
+    const std::optional<UdsTarget> t = current_target(w);
+    std::vector<UdsDidValue> info;
+    bool busy = false;
+    {
+        const std::scoped_lock lock(w.mutex);
+        info = w.target_info;
+        busy = w.busy;
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Target");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(busy || !t);
+    if (ImGui::Button("Read target info"))
+    {
+        did_scan(app, w, *t, 0xF180, 0xF19F, true); // the ISO 14229 identification DIDs
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("22 F180..F19F: part numbers, versions, serial number, VIN, ...");
+    if (info.empty())
+    {
+        return;
+    }
+    const auto did_name = [&w](uint16_t did)
+    {
+        const auto it = w.did_names.find(did);
+        return it != w.did_names.end() ? it->second : std::string(uds_did_name(did));
+    };
+    ImGui::SameLine();
+    if (ImGui::Button("Copy all"))
+    {
+        std::string all;
+        for (const UdsDidValue& v : info)
+        {
+            std::format_to(std::back_inserter(all), "{:04X}\t{}\t{}\n", v.did, did_name(v.did), did_value_text(v.data));
+        }
+        ImGui::SetClipboardText(all.c_str());
+    }
+    ImGui::SetItemTooltip("DID, name and value of every row, tab separated");
+    if (ImGui::BeginTable("##target_info", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("DID", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Value");
+        ImGui::TableHeadersRow();
+        for (const UdsDidValue& v : info)
+        {
+            const std::string value = did_value_text(v.data);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            // The whole row is one selectable: a click copies the value.
+            if (ImGui::Selectable(std::format("{:04X}", v.did).c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
+            {
+                ImGui::SetClipboardText(value.c_str());
+            }
+            ImGui::SetItemTooltip("Click: copy the value\n%s", format_hex_bytes(v.data).c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(did_name(v.did).c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(value.c_str());
+        }
+        ImGui::EndTable();
+    }
 }
 
 std::string dtc_list_named(std::span<const uint8_t> resp, const std::map<uint32_t, std::string>& names);
@@ -655,11 +745,35 @@ void draw_service_tabs(App& app, UdsWindow& w, bool ok)
 
     if (begin_section("DID", ok))
     {
+        // Two halves: DID read / write on the left, what the target is (identification DIDs) on the right.
+        const bool split = ImGui::BeginTable("##did_split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV);
+        if (split)
+        {
+            ImGui::TableNextColumn();
+        }
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("DID");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(em * 4.0f);
         ImGui::InputText("##did", &w.did, ImGuiInputTextFlags_CharsHexadecimal);
+        if (!w.did_names.empty())
+        {
+            // The DIDs of the loaded DID text file: picking one fills the field.
+            ImGui::SameLine(0.0f, 0.0f);
+            if (ImGui::BeginCombo("##didpick", nullptr, ImGuiComboFlags_NoPreview | ImGuiComboFlags_HeightLarge))
+            {
+                for (const auto& [d, name] : w.did_names)
+                {
+                    const std::string hex = std::format("{:04X}", d);
+                    if (ImGui::Selectable(std::format("{}  {}", hex, name).c_str(), hex == w.did))
+                    {
+                        w.did = hex;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip("DIDs from the DID text file");
+        }
         const auto did = hex_field(w.did, 2);
         ImGui::SameLine();
         ImGui::BeginDisabled(!did);
@@ -700,12 +814,27 @@ void draw_service_tabs(App& app, UdsWindow& w, bool ok)
         ImGui::SameLine();
         ImGui::SetNextItemWidth(em * 20.0f);
         ImGui::InputTextWithHint("##didfile", "path to a 'DID name' file", &w.did_file);
-        ImGui::SameLine();
-        if (ImGui::Button("Load##did"))
+        const auto load_did_file = [&]
         {
             const int n = load_dtc_file(w.did_names, w.did_file);
             log_line(app, w, n < 0 ? std::format("DID file: cannot open {}", w.did_file)
                                    : std::format("DID file: loaded {} DID(s) from {}", n, w.did_file));
+        };
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##did"))
+        {
+            file_dialog_open(w.did_dialog, FileDialogMode::Open, "DID Text File", w.did_file,
+                             {{"Text (*.txt)", "*.txt"}, {"All Files", "*"}});
+        }
+        for (const std::string& picked : file_dialog_draw(w.did_dialog))
+        {
+            w.did_file = picked;
+            load_did_file();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load##did"))
+        {
+            load_did_file();
         }
         ImGui::SetItemTooltip("One \"<hex DID> <name>\" per line, e.g. \"F190 VIN\", # lines are comments.\n"
                               "scripts/kraken_mcp.py write_did_file writes one per product.");
@@ -713,6 +842,12 @@ void draw_service_tabs(App& app, UdsWindow& w, bool ok)
         {
             ImGui::SameLine();
             ImGui::TextDisabled("%zu DIDs", w.did_names.size());
+        }
+        if (split)
+        {
+            ImGui::TableNextColumn();
+            draw_target_info(app, w);
+            ImGui::EndTable();
         }
         end_section();
     }
@@ -974,10 +1109,13 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
             UdsEcu& e = w.learner.ecus[i];
             ImGui::TableNextRow();
             ImGui::PushID(static_cast<int>(i));
+            // Every cell on the Name field's frame height, so the row's texts and widgets line up.
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted((e.iface < app.ifaces.size() ? app.ifaces[e.iface].info.name
                                                                 : std::to_string(e.iface)).c_str());
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             if (ImGui::Selectable(std::format("{}{}", target_text({.tx_id = e.tx_id, .rx_id = e.rx_id, .extended = e.extended}),
                                               e.guessed ? " ?" : "").c_str(),
                                   w.ecu == static_cast<int>(i), ImGuiSelectableFlags_SpanAllColumns))
@@ -998,10 +1136,11 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
             ImGui::SetNextItemWidth(-FLT_MIN);
             ImGui::InputText("##name", &e.name);
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(e.services.c_str());
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(busy);
-            if (ImGui::SmallButton("Services"))
+            if (ImGui::Button("Services"))
             {
                 UdsTarget t2{.iface = e.iface, .tx_id = e.tx_id, .rx_id = e.rx_id, .extended = e.extended};
                 apply_transport(t2, w);

@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "decoders/uds_client.h"
+#include "ui/file_dialog.h"
 #include "ui/vim_nav.h"
 
 struct App;
@@ -76,6 +77,7 @@ struct UdsWindow
     std::vector<VimYankItem> yank_items;
     std::map<uint32_t, std::string> did_names; // DID -> name, loaded from a per-product file (same format)
     std::string did_file;
+    FileDialog did_dialog;       // Browse... for the DID text file
     std::string sec_level = "01";
     std::string sec_key;
     std::string raw = "22 F1 90";
@@ -116,6 +118,7 @@ struct UdsWindow
     uint64_t log_total = 0;
     uint64_t log_clears = 0;
     std::vector<UdsEcu> found;   // scan / sweep results for the main thread to merge
+    std::vector<UdsDidValue> target_info; // DID tab, right half: identification DIDs answered
     UdsTarget target;            // current target, for tester present
     bool tester_present = false; // 3E 80 every 2 s to target
     bool busy = false;           // a job is running

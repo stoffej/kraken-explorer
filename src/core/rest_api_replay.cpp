@@ -326,7 +326,7 @@ std::optional<std::string> replay_routes(App& app, WorkspaceTab& tab, std::strin
 
 // --- Trace window --------------------------------------------------------------------------
 
-constexpr std::string_view tab_names[] = {"monitor", "uds", "j1939"};
+constexpr std::string_view tab_names[] = {"monitor", "uds", "j1939", "n2k"};
 
 std::string trace_filter_json(const App& app, const TraceWindowState& s)
 {
@@ -403,7 +403,7 @@ std::string trace_filter(const App& app, TraceWindowState& s, std::string_view b
     return trace_filter_json(app, s);
 }
 
-// POST /trace/view {"tab":"monitor|uds|j1939","view":"monitor|log"}: view applies to that tab.
+// POST /trace/view {"tab":"monitor|uds|j1939|n2k","view":"monitor|log"}: view applies to that tab.
 std::string trace_view(const App& app, TraceWindowState& s, std::string_view body, int& status)
 {
     int tab = static_cast<int>(s.tab);
@@ -412,7 +412,7 @@ std::string trace_view(const App& app, TraceWindowState& s, std::string_view bod
         const auto it = std::ranges::find(tab_names, t);
         if (it == std::end(tab_names))
         {
-            return error(status, 400, "tab: monitor, uds or j1939");
+            return error(status, 400, "tab: monitor, uds, j1939 or n2k");
         }
         tab = static_cast<int>(it - std::begin(tab_names));
         s.tab = static_cast<TraceTab>(tab);

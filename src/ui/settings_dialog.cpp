@@ -94,6 +94,12 @@ void draw_settings_dialog(App& app, SettingsDialogState& s)
     }
     ImGui::SetItemTooltip("Decode ISO-TP with a leading address byte (N_TA / N_AE) in the trace's UDS view.\n"
                           "Turn on only for buses that use extended / mixed addressing.");
+    if (ImGui::Checkbox("NMEA 2000", &app.settings.n2k))
+    {
+        ImGui::MarkIniSettingsDirty();
+    }
+    ImGui::SetItemTooltip("Adds an NMEA 2000 tab after J1939 in the trace: PGN names, fast-packet reassembly\n"
+                          "and decoded fields. Decodes the frames that arrive while it is on.");
 
     ImGui::SeparatorText("Updates");
     if (ImGui::Checkbox("Check for updates", &app.settings.update_check)) // applies at once, like the shortcuts
