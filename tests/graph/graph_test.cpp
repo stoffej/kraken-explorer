@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -403,6 +404,7 @@ TEST_CASE("a drag-drop payload over a plot with unused Y2/Y3 does not assert")
 
 #include <deque>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <pugixml.hpp>
@@ -653,6 +655,63 @@ TEST_CASE("signal list: j/k select a row, Space toggles its visibility")
     ImGui::EndFrame();
     type('k');
     CHECK(g.selected == 1);
+    ImPlot::DestroyContext();
+    ImGui::DestroyContext();
+}
+
+TEST_CASE("legend and signal list: equal signal names of different messages read Message.Signal")
+{
+    ImGui::CreateContext();
+    ImPlot::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = {1400, 900};
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    theme_load_fonts(15.0f);
+
+    App app;
+    const auto frame = [&]
+    {
+        ImGui::NewFrame();
+        WorkspaceTab* tab = draw_workspace(app);
+        draw_graph_windows(app, tab);
+        ImGui::EndFrame();
+        app.menu.pending.reset();
+    };
+    frame();
+    REQUIRE(app.workspace.tabs.size() == 1);
+    GraphState& g = app.workspace.tabs[0].graphs[0];
+    for (const char* parent : {"IMU_axisX_80", "IMU_axisY_80"})
+    {
+        GraphSignal s = sig("deg");
+        s.kind = GraphSignalKind::Lin; // no DBC needed, and not re-resolved away like a CAN signal
+        s.parent = parent;
+        s.name = "Angle";
+        s.t = {0.0, 1.0};
+        s.v = {1.0, 2.0};
+        g.signals.push_back(std::move(s));
+    }
+    CHECK(graph_signal_label(g.signals[0]) == "IMU_axisX_80.Angle"); // the signal list's row text
+    CHECK(graph_signal_label(g.signals[1]) == "IMU_axisY_80.Angle");
+    for (int i = 0; i < 3; ++i)
+    {
+        frame();
+    }
+    std::vector<std::string> legend;
+    ImPlotContext& pc = *ImPlot::GetCurrentContext();
+    for (int k = 0; k < pc.Plots.GetBufSize(); ++k)
+    {
+        ImPlotItemGroup& items = pc.Plots.GetByIndex(k)->Items;
+        for (int j = 0; j < items.GetLegendCount(); ++j)
+        {
+            const std::string_view l = items.GetLegendLabel(j);
+            legend.emplace_back(l.substr(0, l.find("##")));
+        }
+    }
+    CHECK(std::ranges::count(legend, "IMU_axisX_80.Angle") == 1);
+    CHECK(std::ranges::count(legend, "IMU_axisY_80.Angle") == 1);
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
 }
