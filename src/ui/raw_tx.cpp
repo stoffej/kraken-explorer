@@ -57,6 +57,62 @@ bool draw_iface_combo(const char* id, App& app, uint16_t& iface, std::optional<B
     return changed;
 }
 
+void rx_id_width_update(App& app)
+{
+    for (const BusMessage& m : app.rx_scratch)
+    {
+        if (m.type == BusType::CAN && !has_flag(m, bus_flag::tx) && !is_error_frame(m))
+        {
+            if (m.iface >= app.rx_id_width.size())
+            {
+                app.rx_id_width.resize(m.iface + std::size_t{1});
+            }
+            ++app.rx_id_width[m.iface][has_flag(m, bus_flag::extended) ? 1 : 0];
+        }
+    }
+}
+
+std::optional<bool> iface_rx_extended(const App& app, uint16_t iface)
+{
+    if (iface >= app.rx_id_width.size() || app.rx_id_width[iface][0] + app.rx_id_width[iface][1] == 0)
+    {
+        return std::nullopt;
+    }
+    return app.rx_id_width[iface][1] > app.rx_id_width[iface][0];
+}
+
+bool draw_id_width(const App& app, uint16_t iface, bool& extended)
+{
+    const std::optional<bool> traffic = iface_rx_extended(app, iface);
+    bool changed = false;
+    for (const bool ext : {false, true})
+    {
+        if (ext)
+        {
+            ImGui::SameLine();
+        }
+        const bool dim = traffic.has_value() && *traffic != ext;
+        if (dim)
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+        }
+        if (ImGui::RadioButton(ext ? "29-bit" : "11-bit", extended == ext)) // a click on the selected one is a choice too
+        {
+            extended = ext;
+            changed = true;
+        }
+        if (dim)
+        {
+            ImGui::PopStyleVar();
+        }
+        if (traffic)
+        {
+            ImGui::SetItemTooltip("Received on this interface: mostly %s ids", *traffic ? "29-bit" : "11-bit");
+        }
+    }
+    return changed;
+}
+
 bool draw_raw_tx(App& app, BusMessage& msg, const CanDbMessage* db)
 {
     const float px = ImGui::GetFontSize() / 15.0f;
@@ -104,9 +160,17 @@ bool draw_raw_tx(App& app, BusMessage& msg, const CanDbMessage* db)
     ImGui::SameLine();
     // An id above 0x7FF only exists as extended: unticking would send a different (masked) id.
     ImGui::BeginDisabled(msg.id > can_id_mask_standard);
-    changed |= flag_checkbox("Extended", msg, bus_flag::extended);
+    bool ext = has_flag(msg, bus_flag::extended);
+    if (draw_id_width(app, msg.iface, ext))
+    {
+        msg.flags = static_cast<uint16_t>(ext ? msg.flags | bus_flag::extended : msg.flags & ~bus_flag::extended);
+        changed = true;
+    }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Ids above 7FF are always extended");
+    if (msg.id > can_id_mask_standard)
+    {
+        ImGui::SetItemTooltip("Ids above 7FF are always 29-bit");
+    }
     ImGui::SameLine();
     const bool fd = has_flag(msg, bus_flag::fd);
     ImGui::BeginDisabled(fd);

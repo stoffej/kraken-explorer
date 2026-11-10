@@ -54,7 +54,8 @@ struct UdsWindow
     uint16_t iface = 0;          // manual target's interface (App::ifaces index)
     std::string tx_text = "7E0"; // manual request id, hex
     std::string rx_text = "7E8"; // manual response id, hex
-    bool extended = false;       // manual target uses 29-bit ids
+    bool extended = false;       // manual target uses 29-bit ids; follows the traffic until the user picks one
+    bool extended_chosen = false;
 
     // Services tab fields.
     std::string did = "F190";

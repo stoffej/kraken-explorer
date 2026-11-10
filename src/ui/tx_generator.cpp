@@ -518,7 +518,8 @@ void draw_available(App& app, TxGenerator& gen)
     {
         TxCyclic row{.name = "Manual", .interval_ms = gen.interval_ms};
         row.msg.id = gen.manual_id;
-        row.msg.flags = static_cast<uint16_t>((gen.manual_id > can_id_mask_standard ? bus_flag::extended : 0)
+        const bool ext = gen.manual_id > can_id_mask_standard || iface_rx_extended(app, gen.iface).value_or(false);
+        row.msg.flags = static_cast<uint16_t>((ext ? bus_flag::extended : 0)
                                               | (gen.manual_dlc > 8 ? bus_flag::fd : 0));
         // Round up to a valid CAN FD length (e.g. 10 -> 12).
         set_length(row.msg, bus_dlc_lengths[bus_length_to_dlc(gen.manual_dlc)]);

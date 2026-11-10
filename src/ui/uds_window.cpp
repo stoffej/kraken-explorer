@@ -1245,6 +1245,10 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
     if (target)
     {
         const std::scoped_lock lock(w.mutex);
+    if (!w.extended_chosen && !busy) // never switch width under a running request or sweep
+    {
+        w.extended = iface_rx_extended(app, w.iface).value_or(false);
+    }
         w.target = *target; // tester present follows the selection
     }
     if (!w.open)
@@ -1300,7 +1304,7 @@ void draw_uds_window(App& app, UdsWindow& w, const WorkspaceTab& tab)
         ImGui::SetNextItemWidth(em * 5.0f);
         ImGui::InputText("##rx", &w.rx_text, ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::SameLine();
-        ImGui::Checkbox("29-bit", &w.extended);
+        w.extended_chosen |= draw_id_width(app, w.iface, w.extended);
     }
     const bool ok = target.has_value();
     if (!ok)
