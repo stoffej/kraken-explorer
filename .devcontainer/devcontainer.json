@@ -5,8 +5,10 @@
     "remoteUser": "ubuntu",
     "updateRemoteUserUID": true,
     // Run the app on the host's X server (Xwayland under Wayland); Mesa renders in software.
-    "mounts": [ "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind" ],
-    "containerEnv": { "DISPLAY": "${localEnv:DISPLAY}" },
+    // The host's ccache directory: objects survive container rebuilds.
+    "mounts": [ "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+                "source=${localEnv:HOME}/.cache/ccache,target=/ccache,type=bind" ],
+    "containerEnv": { "DISPLAY": "${localEnv:DISPLAY}", "CCACHE_DIR": "/ccache" },
     // Host network: SocketCAN interfaces (vcan0, can0) are visible in the container.
     // Host IPC: Mesa's software renderer hands frames to X through MIT-SHM shared memory.
     "runArgs": [ "--net=host", "--ipc=host" ],

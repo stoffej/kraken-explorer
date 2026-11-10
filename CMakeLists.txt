@@ -21,6 +21,14 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version")
 
 project(kraken_explorer VERSION ${KRAKEN_VERSION} LANGUAGES C CXX)
 
+# ccache when installed, so a rebuild after a branch switch or a header touch reuses unchanged objects.
+# A launcher given on the command line (CI: ccache / sccache) wins.
+find_program(KRAKEN_CCACHE ccache)
+if(KRAKEN_CCACHE AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+    set(CMAKE_C_COMPILER_LAUNCHER ${KRAKEN_CCACHE})
+    set(CMAKE_CXX_COMPILER_LAUNCHER ${KRAKEN_CCACHE})
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

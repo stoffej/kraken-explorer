@@ -13,7 +13,7 @@ build/src/kraken-explorer               # settings: ~/.config/kraken-explorer/kr
 ctest --test-dir build --output-on-failure
 ```
 
-Options: `-DKRAKEN_SANITIZE=ON` (ASan+UBSan, what CI runs), `-DKRAKEN_TESTS=OFF`, `-DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF` (headless: build + ctest only). Default build type is RelWithDebInfo. Local heavy work (build, ctest, smoke) runs as `taskset -c 2-11 nice -n 10` with at most `-j2`, one build at a time: two of the twelve cores stay free. System deps (apt list) are in `docs/manual.md`.
+Options: `-DKRAKEN_SANITIZE=ON` (ASan+UBSan, what CI runs), `-DKRAKEN_TESTS=OFF`, `-DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF` (headless: build + ctest only). Default build type is RelWithDebInfo. ccache is used automatically when installed. Build in Docker so every machine gets the same toolchain: `scripts/build_docker.sh` (pinned `.devcontainer` image, `build-dc/`, `nice -n 10`, `-j$(nproc)` by default, `JOBS` overrides, ccache in the host's `~/.cache/ccache` so it survives between builds); `scripts/build_docker.sh ctest --test-dir build-dc --output-on-failure` for the tests. One build at a time. System deps (apt list) are in `docs/manual.md`.
 
 Tests: one doctest binary per `tests/<area>/<area>_test.cpp`, auto-discovered by glob, ctest name `<area>`, binary `build/tests/<area>/<area>_test`. A new area needs no CMake unless it has data files or defines (then `tests/<area>/CMakeLists.txt`, listed in `tests/CMakeLists.txt`).
 
