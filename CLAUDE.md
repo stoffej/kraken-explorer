@@ -50,4 +50,6 @@ Static libraries under `src/`, each `src/<module>/CMakeLists.txt`, includes root
 
 - Code style is free-function C++, Allman braces, 4 spaces. Comments explain why, and deliberate simplifications are marked `// ponytail: <ceiling>, <upgrade path>` so they can be found later.
 - New source files carry the GPL header from `gpl-header.txt`.
+- No GPL/LGPL/AGPL code, not even reading it.
+- Independent: never copy another product's code, icons, text or templates; never drive or take data from commercial CAN programs.
 - `kraken_tasks` and `kraken_db` require C++23 (`std::move_only_function`, `std::expected`) and export it `PUBLIC`, so everything linking them (`kraken_ui`, the tests) also compiles as C++23; `kraken_core` and `kraken_decoders` stay C++20.
