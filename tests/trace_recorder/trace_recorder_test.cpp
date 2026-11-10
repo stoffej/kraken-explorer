@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "core/bus_message.h"
+#include "core/trace_file_writer.h"
 #include "core/trace_recorder.h"
 
 namespace fs = std::filesystem;
@@ -215,17 +216,33 @@ int pcapng_frames(const std::string& content)
     return packets;
 }
 
+// Records of our MF4 layout; -1 unless finalized (a clean stop finalizes) and the DT block, the
+// file's last, holds exactly its stated records.
+int mf4_frames(const std::string& content)
+{
+    const std::size_t dt = content.rfind("##DT");
+    if (!content.starts_with("MDF     ") || dt == std::string::npos || dt + 24 > content.size())
+    {
+        return -1;
+    }
+    const uint64_t length = le32(content, dt + 8) | uint64_t{le32(content, dt + 12)} << 32;
+    return length == content.size() - dt && (length - 24) % mdf_record_size == 0
+        ? static_cast<int>((length - 24) / mdf_record_size) : -1;
+}
+
 int frames_in(TraceFileFormat format, const std::string& content)
 {
     switch (format)
     {
         case TraceFileFormat::VectorAsc: return asc_frames(content);
         case TraceFileFormat::PcapNg:    return pcapng_frames(content);
+        case TraceFileFormat::VectorMdf: return mf4_frames(content);
         default:                         return candump_frames(content);
     }
 }
 
-constexpr TraceFileFormat recordable[] = {TraceFileFormat::VectorAsc, TraceFileFormat::CanDump, TraceFileFormat::PcapNg};
+constexpr TraceFileFormat recordable[] = {TraceFileFormat::VectorAsc, TraceFileFormat::CanDump, TraceFileFormat::PcapNg,
+                                          TraceFileFormat::VectorMdf};
 
 }
 
@@ -417,6 +434,35 @@ TEST_CASE("stay armed")
     CHECK(files_in(dir.path).size() == 2);
 }
 
+TEST_CASE("MF4 recording is unfinalized while it runs, finalized at the end")
+{
+    TempDir dir;
+    Recorder r;
+    configure(r, dir.path, TraceFileFormat::VectorMdf);
+    recorder_set_armed(r, true, false);
+    recorder_measurement_starting(r);
+    for (int i = 0; i < 100; ++i)
+    {
+        recorder_enqueue(r, bulk_frame(i));
+    }
+    recorder_drain(r);
+
+    // What a crash now would leave: "UnFinMF ", the DT length open, the records so far after it.
+    const auto files = files_in(dir.path);
+    REQUIRE(files.size() == 1);
+    std::string open = read_all(files[0]);
+    CHECK(open.starts_with("UnFinMF "));
+    CHECK(le32(open, 60) % 0x10000 == mdf_unfin_flags);
+    const std::size_t dt = open.rfind("##DT");
+    REQUIRE(dt != std::string::npos);
+    CHECK(le32(open, dt + 8) == 24);
+    CHECK((open.size() - dt - 24) % mdf_record_size == 0);
+    CHECK(open.size() - dt - 24 > 0);
+
+    recorder_measurement_stopped(r);
+    CHECK(mf4_frames(read_all(files[0])) == 100);
+}
+
 TEST_CASE("unusable folder disarms")
 {
     TempDir dir;
@@ -435,7 +481,7 @@ TEST_CASE("unsupported format disarms")
 {
     TempDir dir;
     Recorder r;
-    configure(r, dir.path, TraceFileFormat::VectorMdf);
+    configure(r, dir.path, TraceFileFormat::Blf);
     recorder_set_armed(r, true, false);
     recorder_measurement_starting(r);
 

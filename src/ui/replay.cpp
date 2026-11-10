@@ -827,9 +827,10 @@ std::string mdf_text(const Bytes& b, uint64_t off)
 }
 
 // The records of a data group (or the signal data of a VLSD channel): DT/SD, DZ (deflate,
-// optionally transposed), DL lists and HL headers, concatenated.
+// optionally transposed), DL lists and HL headers, concatenated. open_dt: the file is unfinalized
+// with a stale last-DT length (CANedge writes "##DT" of length 24, then records up to EOF).
 // ponytail: the whole group in RAM, stream DL entries if huge MF4 files show up.
-void mdf_data(const Bytes& b, uint64_t off, std::string& out, int depth = 0)
+void mdf_data(const Bytes& b, uint64_t off, std::string& out, bool open_dt = false, int depth = 0)
 {
     for (int guard = 0; off != 0 && depth < 8 && guard < 1'000'000; ++guard)
     {
@@ -840,6 +841,14 @@ void mdf_data(const Bytes& b, uint64_t off, std::string& out, int depth = 0)
         }
         if (blk->id == "DT" || blk->id == "DV" || blk->id == "SD")
         {
+            // The DT still being written is the one no block follows (blocks start 8-byte aligned).
+            const std::size_t end = blk->data.d.data() + blk->data.d.size() - b.d.data();
+            const std::size_t next = (end + 7) & ~std::size_t{7};
+            if (open_dt && blk->id == "DT" && end < b.d.size() && !(b.has(next, 2) && b.d.substr(next, 2) == "##"))
+            {
+                out.append(b.d.substr(end - blk->data.d.size()));
+                return;
+            }
             out.append(blk->data.d);
             return;
         }
@@ -881,7 +890,7 @@ void mdf_data(const Bytes& b, uint64_t off, std::string& out, int depth = 0)
         {
             for (std::size_t i = 1; i < blk->links.size(); ++i)
             {
-                mdf_data(b, blk->links[i], out, depth + 1);
+                mdf_data(b, blk->links[i], out, open_dt, depth + 1);
             }
             off = mdf_link(*blk, 0);
             continue;
@@ -952,7 +961,10 @@ struct MdfCanGroup
     bool lin_error = false;
     bool data_vlsd = false; // DataBytes is a VLSD channel: the record holds an offset into sd
     std::string sd;         // its signal data, u32 length + bytes per sample
+    uint64_t cg_off = 0;    // this group's CG block
+    uint64_t data_cg = 0;   // DataBytes' samples are the records of this VLSD channel group (CANedge)
     MdfField time, channel, id, ide, dlc, length, data, dir, edl, brs;
+    double time_offset = 0.0, time_factor = 1.0; // linear conversion of time (CANedge: ns, factor 1e-9)
 };
 
 void mdf_channels(const Bytes& b, uint64_t off, MdfCanGroup& g, int depth = 0)
@@ -977,6 +989,14 @@ void mdf_channels(const Bytes& b, uint64_t off, MdfCanGroup& g, int depth = 0)
         if (cn_type == 2 || cn_type == 3)
         {
             g.time = f;
+            // cn_cc_conversion: a linear CC (cc_type 1) holds offset, factor from byte 24 of its data.
+            // ponytail: linear only; other conversion types on a time channel are taken as identity.
+            const auto cc = mdf_block(b, mdf_link(*cn, 4));
+            if (cc && cc->id == "CC" && cc->data.has(24, 16) && cc->data.d[0] == 1)
+            {
+                std::memcpy(&g.time_offset, cc->data.d.data() + 24, 8);
+                std::memcpy(&g.time_factor, cc->data.d.data() + 32, 8);
+            }
         }
         else if (leaf == "BusChannel") g.channel = f;
         else if (leaf == "ID") g.id = f;
@@ -988,9 +1008,15 @@ void mdf_channels(const Bytes& b, uint64_t off, MdfCanGroup& g, int depth = 0)
         {
             g.data = f;
             g.data_vlsd = cn_type == 1;
-            if (g.data_vlsd)
+            // cn_data: SD block(s), DZ/DL of them, or a VLSD channel group in the same data group.
+            const auto target = g.data_vlsd ? mdf_block(b, mdf_link(*cn, 5)) : std::nullopt;
+            if (target && target->id == "CG")
             {
-                mdf_data(b, mdf_link(*cn, 5), g.sd); // cn_data: SD block(s), or DZ/DL of them
+                g.data_cg = mdf_link(*cn, 5);
+            }
+            else if (g.data_vlsd)
+            {
+                mdf_data(b, mdf_link(*cn, 5), g.sd);
             }
         }
         else if (leaf == "Dir") g.dir = f;
@@ -1004,7 +1030,7 @@ void mdf_channels(const Bytes& b, uint64_t off, MdfCanGroup& g, int depth = 0)
 void mdf_frame(std::string_view rec, const MdfCanGroup& g, int64_t start_ns, ReplayFile& f)
 {
     BusMessage m;
-    m.ts_ns = start_ns + static_cast<int64_t>(std::llround(mdf_time(rec, g.time) * 1e9));
+    m.ts_ns = start_ns + static_cast<int64_t>(std::llround((g.time_offset + g.time_factor * mdf_time(rec, g.time)) * 1e9));
     uint64_t id = mdf_uint(rec, g.id);
     int len = 0;
     if (g.lin)
@@ -1061,10 +1087,14 @@ void mdf_frame(std::string_view rec, const MdfCanGroup& g, int64_t start_ns, Rep
 void parse_mf4(std::string_view data, ReplayFile& f, const ReplayParseProgress& p)
 {
     const Bytes b{data};
-    if (!b.has(0, 64) || !data.starts_with("MDF     "))
+    // "UnFinMF ": an unfinalized file (CANedge loggers write only these, for power safety).
+    if (!b.has(0, 64) || !(data.starts_with("MDF     ") || data.starts_with("UnFinMF ")))
     {
         return;
     }
+    // id_unfin_flags bit 2: the last DT block's length was never updated. The cycle counters
+    // (bits 0, 1) are not read anyway; a record cut off at EOF is dropped by the framing below.
+    const bool open_dt = data.starts_with("UnFinMF ") && (b.u16(60) & 0x04) != 0;
     const auto hd = mdf_block(b, 64);
     if (!hd || hd->id != "HD")
     {
@@ -1102,13 +1132,14 @@ void parse_mf4(std::string_view data, ReplayFile& f, const ReplayParseProgress& 
                 break;
             }
             MdfCanGroup g{.record_id = mdf_u64(cg->data, 0), .size = cg->data.u32(24) + cg->data.u32(28),
-                          .vlsd = (cg->data.u16(16) & 1) != 0};
+                          .vlsd = (cg->data.u16(16) & 1) != 0, .cg_off = cg_off};
             mdf_channels(b, mdf_link(*cg, 1), g);
             groups.push_back(std::move(g));
             cg_off = mdf_link(*cg, 0);
         }
         records.clear();
-        mdf_data(b, mdf_link(*dg, 2), records);
+        mdf_data(b, mdf_link(*dg, 2), records, open_dt);
+        std::vector<std::pair<std::size_t, std::size_t>> deferred; // group index, record position
         for (std::size_t pos = 0; pos < records.size();)
         {
             uint64_t rid = 0;
@@ -1129,24 +1160,54 @@ void parse_mf4(std::string_view data, ReplayFile& f, const ReplayParseProgress& 
             {
                 break; // unknown record id: the rest cannot be framed
             }
-            if (g->vlsd) // variable length record: u32 length + bytes, skipped
+            if (g->vlsd) // variable length record: u32 length + bytes, kept as the group's signal data
             {
-                if (pos + 4 > records.size())
+                if (pos + 4 > records.size() || pos + 4 + Bytes{records}.u32(pos) > records.size())
                 {
                     break;
                 }
-                pos += 4 + Bytes{records}.u32(pos);
+                const std::size_t n_sd = 4 + Bytes{records}.u32(pos);
+                g->sd.append(records, pos, n_sd);
+                pos += n_sd;
                 continue;
             }
             if (g->size == 0 || pos + g->size > records.size())
             {
                 break;
             }
-            if (g->id.present)
+            if (g->id.present && g->data_cg != 0)
+            {
+                deferred.emplace_back(g - groups.begin(), pos); // its data may still follow
+            }
+            else if (g->id.present)
             {
                 mdf_frame(std::string_view(records).substr(pos, g->size), *g, start_ns, f);
             }
             pos += g->size;
+        }
+        // Offsets of the frame records point into the VLSD group's records. Moved, not copied: in a
+        // CANedge file that is nearly all the data. A second frame group on the same VLSD group copies
+        // from the first, the VLSD group is emptied by then.
+        for (auto g = groups.begin(); g != groups.end(); ++g)
+        {
+            const auto src = std::ranges::find(groups, g->data_cg, &MdfCanGroup::cg_off);
+            if (g->data_cg == 0 || src == groups.end())
+            {
+                continue;
+            }
+            const auto first = std::ranges::find(groups.begin(), g, g->data_cg, &MdfCanGroup::data_cg);
+            if (first != g)
+            {
+                g->sd = first->sd;
+            }
+            else
+            {
+                g->sd = std::move(src->sd);
+            }
+        }
+        for (const auto& [gi, at] : deferred)
+        {
+            mdf_frame(std::string_view(records).substr(at, groups[gi].size), groups[gi], start_ns, f);
         }
         dg_off = mdf_link(*dg, 0);
     }

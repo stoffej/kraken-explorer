@@ -937,6 +937,174 @@ TEST_CASE("MF4: python-can's bus logging file, asammdf's DZ variant, and our own
     }
 }
 
+TEST_CASE("MF4: unfinalized as CANedge writes it (stale DT length, record cut off at EOF)")
+{
+    std::vector<BusMessage> frames;
+    for (uint32_t i = 0; i < 5; ++i)
+    {
+        frames.push_back(BusMessage{.id = 0x100 + i, .dlc = 8, .len = 8, .ts_ns = 1'700'000'000'000'000'000 + int64_t{i} * 1'000'000});
+    }
+    std::ostringstream out;
+    write_trace_file(out, TraceFileFormat::VectorMdf, frames, [](uint16_t) { return std::string(); });
+    std::string file = out.str();
+    // Our DT block is the file's last: make it the open one of an unfinalized file.
+    const std::size_t dt = file.rfind("##DT");
+    REQUIRE(dt != std::string::npos);
+    file.replace(0, 8, "UnFinMF ");
+    file[60] = 0x05; // id_unfin_flags: cycle counters and last DT length not updated
+    file.replace(dt + 8, 8, std::string("\x18\0\0\0\0\0\0\0", 8));
+    const std::size_t record = (file.size() - dt - 24) / frames.size();
+    file.resize(file.size() - record / 2); // power cut in the middle of the last record
+
+    const ReplayFile f = replay_parse(file, TraceFileFormat::VectorMdf);
+    REQUIRE(f.frames.size() == 4);
+    CHECK(f.frames[3].id == 0x103);
+
+    // A DT ending unaligned within the file's last 8 bytes: no room for a next block, so it is the
+    // open one (this used to throw std::out_of_range).
+    file = out.str();
+    file.replace(0, 8, "UnFinMF ");
+    file[60] = 0x05;
+    const uint64_t len = 24 + 3 * record; // 3 records of 78 bytes: ends 2 bytes past an 8-byte boundary
+    file.replace(dt + 8, 8, std::string(reinterpret_cast<const char*>(&len), 8));
+    file.resize(dt + len + 3);
+    CHECK(replay_parse(file, TraceFileFormat::VectorMdf).frames.size() == 3);
+}
+
+TEST_CASE("MF4: DataBytes in a VLSD channel group, shared by two frame groups (CANedge layout)")
+{
+    // Built byte by byte from fictional frames: CANedge stores DataBytes as offsets into the records
+    // of a VLSD channel group in the same data group, and the time as ns through a linear conversion.
+    // The frame records come before the VLSD records, and two frame groups share the VLSD group.
+    std::string file(64, '\0');
+    file.replace(0, 8, "MDF     ");
+    const auto le64 = [](std::string& s, uint64_t v)
+    {
+        le32(s, static_cast<uint32_t>(v));
+        le32(s, static_cast<uint32_t>(v >> 32));
+    };
+    const auto f64 = [](std::string& s, double v)
+    {
+        char raw[8];
+        std::memcpy(raw, &v, 8);
+        s.append(raw, 8);
+    };
+    // Header, zeroed links (set with link()), data, padded to 8 bytes. Returns the block's offset.
+    const auto block = [&](std::string_view id, uint64_t links, const std::string& data)
+    {
+        const uint64_t off = file.size();
+        file += "##";
+        file += id;
+        le32(file, 0);
+        le64(file, 24 + links * 8 + data.size());
+        le64(file, links);
+        file.append(links * 8, '\0');
+        file += data;
+        file.resize((file.size() + 7) & ~std::size_t{7}, '\0');
+        return off;
+    };
+    const auto link = [&](uint64_t blk, std::size_t i, uint64_t to)
+    {
+        std::string s;
+        le64(s, to);
+        file.replace(blk + 24 + i * 8, 8, s);
+    };
+    // cn_type, cn_sync_type, cn_data_type, cn_bit_offset, cn_byte_offset, cn_bit_count; cn_tx_name.
+    const auto channel = [&](std::string_view name, uint8_t type, uint8_t sync, uint8_t data_type, uint32_t byte, uint32_t bits)
+    {
+        std::string d{static_cast<char>(type), static_cast<char>(sync), static_cast<char>(data_type), '\0'};
+        le32(d, byte);
+        le32(d, bits);
+        d.resize(72, '\0');
+        const uint64_t cn = block("CN", 8, d);
+        link(cn, 2, block("TX", 0, std::string(name) + '\0'));
+        return cn;
+    };
+    // cg_record_id, cg_cycle_count, cg_flags (bit 0: VLSD), cg_path_separator, reserved, cg_data_bytes, cg_inval_bytes.
+    const auto group = [&](uint64_t record_id, uint64_t cycles, uint16_t flags, uint32_t data_bytes)
+    {
+        std::string d;
+        le64(d, record_id);
+        le64(d, cycles);
+        le16(d, flags);
+        le16(d, 0);
+        le32(d, 0);
+        le32(d, data_bytes);
+        le32(d, 0);
+        return block("CG", 6, d);
+    };
+
+    constexpr int64_t start_ns = 1'700'000'000'000'000'000;
+    std::string hd_data;
+    le64(hd_data, start_ns);
+    hd_data.resize(32, '\0'); // UTC, no offsets
+    const uint64_t hd = block("HD", 6, hd_data);
+
+    std::string cc_data{'\x01', '\0'}; // cc_type 1: linear, phys = offset + factor * raw
+    le16(cc_data, 0);
+    le16(cc_data, 0);
+    le16(cc_data, 2);                  // cc_val_count
+    f64(cc_data, 0.0);
+    f64(cc_data, 0.0);
+    f64(cc_data, 0.0);                 // offset
+    f64(cc_data, 1e-9);                // factor: ns to s
+    const uint64_t cc = block("CC", 4, cc_data);
+
+    // Record: u64 time (ns), u32 ID, u8 DLC, u64 offset of DataBytes in the VLSD group = 21 bytes.
+    const uint64_t t = channel("Timestamp", 2, 1, 0, 0, 64);
+    const uint64_t id = channel("CAN_DataFrame.ID", 0, 0, 0, 8, 32);
+    const uint64_t dlc = channel("CAN_DataFrame.DLC", 0, 0, 0, 12, 8);
+    const uint64_t bytes = channel("CAN_DataFrame.DataBytes", 1, 0, 10, 13, 64);
+    link(t, 4, cc);
+    link(t, 0, id);
+    link(id, 0, dlc);
+    link(dlc, 0, bytes);
+
+    const uint64_t cg1 = group(1, 2, 0, 21);
+    const uint64_t cg3 = group(3, 2, 0, 21);
+    const uint64_t vlsd = group(2, 4, 1, 0);
+    link(cg1, 1, t);
+    link(cg3, 1, t); // same channels: both groups point their DataBytes at the one VLSD group
+    link(cg1, 0, cg3);
+    link(cg3, 0, vlsd);
+    link(bytes, 5, vlsd);
+
+    const uint64_t dg = block("DG", 4, std::string("\x01\0\0\0\0\0\0\0", 8)); // 1-byte record ids
+    link(dg, 1, cg1);
+    link(hd, 0, dg);
+
+    std::string records;
+    for (uint32_t k = 0; k < 4; ++k)
+    {
+        records += static_cast<char>(k < 2 ? 1 : 3);
+        le64(records, uint64_t{k} * 1'000'000);
+        le32(records, 0x100 + k);
+        records += '\x08';
+        le64(records, uint64_t{k} * 12); // u32 length + 8 bytes per VLSD record
+    }
+    for (uint32_t k = 0; k < 4; ++k)
+    {
+        records += '\x02';
+        le32(records, 8);
+        records += static_cast<char>(k);
+        records += static_cast<char>(0xA0 + k);
+        records.append(6, '\0');
+    }
+    link(dg, 2, block("DT", 0, records));
+
+    const ReplayFile f = replay_parse(file, TraceFileFormat::VectorMdf);
+    REQUIRE(f.frames.size() == 4);
+    for (const BusMessage& m : f.frames)
+    {
+        const uint32_t k = m.id - 0x100;
+        REQUIRE(k < 4);
+        CHECK(m.len == 8);
+        CHECK(m.ts_ns == start_ns + int64_t{k} * 1'000'000);
+        CHECK(m.data[0] == k);
+        CHECK(m.data[1] == 0xA0 + k);
+    }
+}
+
 TEST_CASE("MF4: asammdf's LIN_Frame and LIN_ChecksumError groups")
 {
     std::ifstream in(std::filesystem::path(REPLAY_DATA_DIR) / "asammdf_lin.mf4", std::ios::binary);
