@@ -99,6 +99,7 @@ struct AggRow
     BusMessage last{};
     BusMessage prev{}; // previous frame of this row; len == 0 before the second one
     uint32_t order = 0; // 1-based order of appearance (Index column)
+    uint64_t count = 1; // frames received (Count column)
     bool has_prev = false;
     CycleStats cycle;
 };
@@ -218,9 +219,10 @@ void trace_window_goto(TraceWindowState& s, const Trace& t, uint64_t file_index,
 // shows its error flags / "-" either way.
 void trace_append_data(std::string& out, const BusMessage& m, bool decimal);
 void trace_append_id(std::string& out, const BusMessage& m, bool decimal);
-// Value of an expanded signal row: "raw - value name", else the physical value (+ unit) with up
-// to 15 significant digits ("0.3", not "0.30000000000000004"); float32 signals at float precision.
-void trace_append_signal_value(std::string& out, const CanDbSignal& sig, uint64_t raw);
+// Value of an expanded signal row: "raw - value name", else the physical value (+ unit); integer
+// signals with the decimals of factor and offset (can_signal_format), so the decimal point stays
+// put, left-padded to width characters; float32 signals at float precision, float64 15 digits.
+void trace_append_signal_value(std::string& out, const CanDbSignal& sig, uint64_t raw, std::size_t width = 0);
 // The whole trace as CSV with the DBC columns (sender, name, decoded signals) next to the raw
 // data. Returns the number of frames written, -1 when the file cannot be opened.
 int64_t trace_write_csv(const App& app, const std::string& path);
