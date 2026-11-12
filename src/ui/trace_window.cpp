@@ -64,6 +64,7 @@ enum Column
     col_cycle_max,
     col_cycle_mean,
     col_cycle_median,
+    col_rx_count,
     col_agg_count,
 };
 
@@ -92,6 +93,7 @@ constexpr ColumnDef columns[col_agg_count] = {
     {"Cycle max", "1000.000", 0, true},
     {"Cycle", "1000.000", 0, false}, // mean
     {"Cycle median", "1000.000", 0, true},
+    {"Count", "000000", 0, false},
 };
 
 // Free-text columns share the width left by the fixed ones, weighted by their weight above.
@@ -385,6 +387,7 @@ void process_frame(TraceWindowState& s, const App& app, uint64_t index)
         row.prev = row.last;
         row.last = m;
         row.has_prev = true;
+        ++row.count;
         if (m.ts_ns >= row.prev.ts_ns && (row.prev.ts_ns >= s.cycle_cut_ns || m.ts_ns < s.cycle_cut_ns)) // not across a stop
         {
             cycle_stats_add(row.cycle, m.ts_ns - row.prev.ts_ns);
@@ -449,7 +452,7 @@ void file_view_agg(TraceWindowState& s, const App& app)
     const FrameCache& c = *app.trace_file;
     for (const FrameCacheRow& r : c.rows)
     {
-        AggRow row{.last = frame_cache_frame(c, c.row_frames[r.first + r.count - 1]), .order = static_cast<uint32_t>(s.agg.size() + 1)};
+        AggRow row{.last = frame_cache_frame(c, c.row_frames[r.first + r.count - 1]), .order = static_cast<uint32_t>(s.agg.size() + 1), .count = r.count};
         if (r.count > 1)
         {
             row.prev = frame_cache_frame(c, c.row_frames[r.first + r.count - 2]);
@@ -874,7 +877,8 @@ constexpr Align column_align(int col)
     case col_cycle_min:
     case col_cycle_max:
     case col_cycle_mean:
-    case col_cycle_median: return Align::Right;
+    case col_cycle_median:
+    case col_rx_count: return Align::Right;
     case col_name:
     case col_data:
     case col_signals:
@@ -955,14 +959,15 @@ void yank_finish(Ctx& c)
     g_yank_cells = nullptr;
 }
 
-// Data column in the mono font; bytes set in `changed` in orange (DataColumnDelegate).
-void data_cell(Ctx& c, std::string_view text, uint64_t changed, float alpha)
+// Data column in the mono font; bytes set in `changed` in orange (DataColumnDelegate). The first
+// `pad` characters are alignment only and are left out of 'y'.
+void data_cell(Ctx& c, std::string_view text, uint64_t changed, float alpha, std::size_t pad = 0)
 {
     if (!ImGui::TableSetColumnIndex(col_data) || text.empty())
     {
         return;
     }
-    yank_cell(text);
+    yank_cell(text.substr(pad));
     if (c.app.fonts.mono != nullptr)
     {
         ImGui::PushFont(c.app.fonts.mono, 0.0f);
@@ -1422,8 +1427,12 @@ void signal_rows(Ctx& c, const BusMessage& m, float alpha)
         {
             const uint64_t raw = can_signal_extract_raw(sig, m);
             b.clear();
-            trace_append_signal_value(b, sig, raw);
-            data_cell(c, b, 0, alpha);
+            // Pad to the DBC range so the unit does not move as the value grows a digit (mono font).
+            const std::size_t width = sig.min < sig.max ? std::max(can_signal_format(sig, sig.min).size(),
+                                                                   can_signal_format(sig, sig.max).size())
+                                                        : 0;
+            trace_append_signal_value(b, sig, raw, width);
+            data_cell(c, b, 0, alpha, std::min(b.find_first_not_of(' '), b.size()));
         }
         std::string_view comment = sig.comment;
         cell(col_comment, comment.substr(0, comment.find('\n')));
@@ -1481,6 +1490,7 @@ bool agg_less(const App& app, const AggRow& a, const AggRow& b, int col)
     case col_data: return std::ranges::lexicographical_compare(std::span(x.data.data(), x.len), std::span(y.data.data(), y.len));
     case col_cycle_min: return a.cycle.min_ns < b.cycle.min_ns;
     case col_cycle_max: return a.cycle.max_ns < b.cycle.max_ns;
+    case col_rx_count: return a.count < b.count;
     case col_cycle_mean:
         return static_cast<double>(a.cycle.sum_ns) * static_cast<double>(b.cycle.count)
                < static_cast<double>(b.cycle.sum_ns) * static_cast<double>(a.cycle.count);
@@ -1562,6 +1572,9 @@ void draw_monitor_aggregated(Ctx& c, float px)
         {
             frame_cells(c, row.last, row.has_prev ? row.prev.ts_ns : 0, row.has_prev ? &row.prev : nullptr, alpha);
             cycle_cells(c, row.cycle);
+            c.buf.clear();
+            std::format_to(std::back_inserter(c.buf), "{}", row.count);
+            cell(col_rx_count, c.buf);
         }
         if (open)
         {
@@ -2245,10 +2258,23 @@ void trace_append_id(std::string& out, const BusMessage& m, bool decimal)
     out.append(t, std::to_chars(t, t + sizeof t, m.type == BusType::LIN ? m.id & 0x3F : can_id(m)).ptr);
 }
 
-void trace_append_signal_value(std::string& out, const CanDbSignal& sig, uint64_t raw)
+void trace_append_signal_value(std::string& out, const CanDbSignal& sig, uint64_t raw, std::size_t width)
 {
-    append_signal_value(out, raw, can_signal_value_name(sig, raw), can_signal_raw_to_physical(sig, raw), sig.unit,
-                        sig.value_type == SignalValueType::float32 && sig.length == 32);
+    const std::string_view name = can_signal_value_name(sig, raw);
+    if (!name.empty() || sig.value_type != SignalValueType::integer)
+    {
+        append_signal_value(out, raw, name, can_signal_raw_to_physical(sig, raw), sig.unit,
+                            sig.value_type == SignalValueType::float32 && sig.length == 32);
+        return;
+    }
+    const std::string v = can_signal_format(sig, can_signal_raw_to_physical(sig, raw));
+    out.append(width > v.size() ? width - v.size() : 0, ' ');
+    out += v;
+    if (!sig.unit.empty())
+    {
+        out += ' ';
+        out += sig.unit;
+    }
 }
 
 void draw_trace_window(App& app, TraceWindowState& s, const WorkspaceTab& tab)

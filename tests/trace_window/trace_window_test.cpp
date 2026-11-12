@@ -95,6 +95,8 @@ TEST_CASE("update aggregates per id, filters and follows a clear")
     REQUIRE(s.agg.size() == 3); // TX 0x100 is its own row
     CHECK(s.agg[0].last.data[0] == 3);
     CHECK(s.agg[0].prev.data[0] == 1);
+    CHECK(s.agg[0].count == 2); // Count column
+    CHECK(s.agg[1].count == 1);
     CHECK(s.rolling[2].prev == 0); // previous 0x100 RX frame is trace index 0
     CHECK(s.rolling[3].prev == UINT64_MAX);
 
@@ -461,7 +463,7 @@ static const ImGuiTable* agg_table()
     ImGuiContext& g = *ImGui::GetCurrentContext();
     for (int i = 0; i < g.Tables.GetMapSize(); ++i)
     {
-        if (const ImGuiTable* t = g.Tables.TryGetMapData(i); t != nullptr && t->ColumnsCount == 16)
+        if (const ImGuiTable* t = g.Tables.TryGetMapData(i); t != nullptr && t->ColumnsCount == 17)
         {
             return t;
         }
@@ -479,9 +481,9 @@ TEST_CASE("monitor default columns fit a narrow dock, ScrollX only below the min
         const BusMessage m = frame(0x123, {1, 2, 3, 4, 5, 6, 7, 8}, 0, 1);
         trace_append(app.trace, {&m, 1});
 
-        // Default-visible: Index, Time, ID, Name, DLC, Data, Cycle (mean); Signals is disabled in Monitor.
-        constexpr bool shown[16] = {true, true, false, false, false, true, false, true,
-                                    true, true, false, false, false, false, true, false};
+        // Default-visible: Index, Time, ID, Name, DLC, Data, Cycle (mean), Count; Signals is disabled in Monitor.
+        constexpr bool shown[17] = {true, true, false, false, false, true, false, true, true,
+                                    true, false, false, false, false, true, false, true};
         struct Layout
         {
             float total, outer;
@@ -512,7 +514,7 @@ TEST_CASE("monitor default columns fit a narrow dock, ScrollX only below the min
         const Layout wide = layout(1600.0f);
         CHECK_FALSE(wide.scroll);
         CHECK(wide.total <= wide.outer + 1.0f);
-        CHECK(wide.total > wide.outer - 7 * 2 * ImGui::GetStyle().CellPadding.x - 20.0f); // fills the width
+        CHECK(wide.total > wide.outer - 8 * 2 * ImGui::GetStyle().CellPadding.x - 20.0f); // fills the width
         CHECK(wide.data_widest);
 
         // The default Trace dock: everything fits, Data still gets the most room.
@@ -541,6 +543,12 @@ TEST_CASE("signal rows print physical values without float noise")
         return out;
     };
     CHECK(text({.length = 8, .is_unsigned = true, .factor = 0.1}, 3) == "0.3");
+    // Fixed decimals from the factor: the decimal point does not jump between 99 and 85.5.
+    CHECK(text({.length = 8, .is_unsigned = true, .factor = 0.5}, 198) == "99.0");
+    CanDbSignal pct{.length = 8, .is_unsigned = true, .factor = 0.5, .unit = "%"};
+    std::string padded;
+    trace_append_signal_value(padded, pct, 3, 5);
+    CHECK(padded == "  1.5 %");
     CHECK(text({.length = 32, .is_unsigned = true}, 1234567) == "1234567");
     CHECK(text({.length = 8}, 0xFF) == "-1");
     CHECK(text({.length = 8, .is_unsigned = true, .value_table = {{2, "On"}}}, 2) == "2 - On");
