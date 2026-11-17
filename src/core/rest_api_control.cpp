@@ -426,22 +426,29 @@ std::string tab_json(App& app, std::string_view sub, std::string_view body, int&
 
 // ---- Graph export: {"graph":"Graph 2","path":"x.csv|x.png"} ----
 
-std::string graph_export_json(App& app, std::string_view body, int& status)
+// The graph window named by body's "graph" ("Graph", "Graph 2", ...; missing: "Graph") in body's tab.
+GraphState* find_graph(App& app, std::string_view body)
 {
     WorkspaceTab* tab = find_tab(app, body);
-    const std::string name = json_get(body, "graph");
-    const std::string path = json_get(body, "path");
     if (tab == nullptr)
     {
-        return error(status, 400, "no such tab");
+        return nullptr;
     }
+    const std::string name = json_get(body, "graph");
     const auto g = std::ranges::find_if(tab->graphs, [&](const GraphState& gs)
     {
         return (gs.id == 0 ? std::string("Graph") : std::format("Graph {}", gs.id)) == (name.empty() ? "Graph" : name);
     });
-    if (g == tab->graphs.end())
+    return g == tab->graphs.end() ? nullptr : &*g;
+}
+
+std::string graph_export_json(App& app, std::string_view body, int& status)
+{
+    GraphState* g = find_graph(app, body);
+    const std::string path = json_get(body, "path");
+    if (g == nullptr)
     {
-        return error(status, 400, "no such graph (\"Graph\", \"Graph 2\", ...)");
+        return error(status, 400, "no such tab or graph (\"Graph\", \"Graph 2\", ...)");
     }
     if (path.empty())
     {
@@ -455,6 +462,49 @@ std::string graph_export_json(App& app, std::string_view body, int& status)
     }
     graph_export_csv(*g, path);
     return std::filesystem::exists(path) ? std::format("{{\"csv\":{}}}", json_string(path)) : error(status, 500, "cannot write " + path);
+}
+
+// /graph/remove {"graph":"Graph 2","signals":"Msg.A, B"}: drop those signals ("Message.Signal", or a
+// bare name: every signal of that name). /graph/close {"graph":"Graph 2"}: close the window, as its
+// x does; the docked "Graph" has none (409).
+std::string graph_edit_json(App& app, std::string_view sub, std::string_view body, int& status)
+{
+    GraphState* g = find_graph(app, body);
+    if (g == nullptr)
+    {
+        return error(status, 400, "no such tab or graph (\"Graph\", \"Graph 2\", ...)");
+    }
+    if (sub == "/close")
+    {
+        if (g->id == 0)
+        {
+            return error(status, 409, "the docked \"Graph\" cannot be closed; remove its signals instead");
+        }
+        g->open = false; // erased after the next frame's draw, like the window's x
+        return "{\"closed\":true}";
+    }
+    const std::string list = json_get(body, "signals");
+    std::string removed;
+    for (std::string_view rest = list; !rest.empty();)
+    {
+        const std::size_t comma = rest.find(',');
+        const std::string_view name = trim(rest.substr(0, comma));
+        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+        for (std::size_t i = g->signals.size(); i-- > 0;)
+        {
+            const std::string label = graph_signal_label(g->signals[i]);
+            if (!name.empty() && (label == name || g->signals[i].name == name))
+            {
+                removed += (removed.empty() ? "" : ",") + json_string(label);
+                graph_remove_signal(*g, i);
+            }
+        }
+    }
+    if (removed.empty())
+    {
+        return error(status, 400, "no such signal in the graph (\"Message.Signal, ...\")");
+    }
+    return std::format("{{\"removed\":[{}]}}", removed);
 }
 
 // ---- Convert ----
@@ -657,6 +707,10 @@ std::optional<std::string> rest_control_routes(App& app, std::string_view method
     if (post && path == "/graph/export")
     {
         return graph_export_json(app, body, status);
+    }
+    if (post && (path == "/graph/remove" || path == "/graph/close"))
+    {
+        return graph_edit_json(app, path.substr(6), body, status);
     }
     if ((post && (path == "/convert/database" || path == "/convert/log" || path == "/convert/cancel"))
         || (get && path == "/convert/status"))

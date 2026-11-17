@@ -310,27 +310,45 @@ std::string graph_json(App& app, std::string_view body, int& status)
         }
         picked.push_back(*e);
     }
-    if (picked.size() < (xy ? 2u : 1u))
+    // "graph": add to that existing window ("Graph", "Graph 2", ...) instead of opening a new one.
+    const std::string target = json_get(body, "graph");
+    if (picked.size() < (xy && target.empty() ? 2u : 1u))
     {
-        return xy ? "{\"error\":\"xy needs two signals or more: X first, then Y\"}"
-                  : "{\"error\":\"signals missing (\\\"Message.Signal, ...\\\")\"}";
+        return xy && target.empty() ? "{\"error\":\"xy needs two signals or more: X first, then Y\"}"
+                                    : "{\"error\":\"signals missing (\\\"Message.Signal, ...\\\")\"}";
     }
     if (tab == nullptr)
     {
         status = 409;
         return "{\"error\":\"no workspace tab\"}";
     }
+    const auto title = [](const GraphState& gs) { return gs.id == 0 ? std::string("Graph") : std::format("Graph {}", gs.id); };
+    GraphState* target_graph = nullptr;
+    if (!target.empty())
+    {
+        const auto found = std::ranges::find_if(tab->graphs, [&](const GraphState& gs) { return title(gs) == target; });
+        if (found == tab->graphs.end())
+        {
+            return "{\"error\":\"no such graph (\\\"Graph\\\", \\\"Graph 2\\\", ...)\"}";
+        }
+        target_graph = &*found;
+    }
     // The docked "Graph" while it is still empty, else a new graph docked beside it.
     const auto main = std::ranges::find(tab->graphs, 0u, &GraphState::id);
-    GraphState& g = main != tab->graphs.end() && main->signals.empty() ? *main : graph_new(*tab);
-    if (g.id != 0)
+    GraphState& g = target_graph != nullptr                                ? *target_graph
+                    : main != tab->graphs.end() && main->signals.empty() ? *main
+                                                                           : graph_new(*tab);
+    if (g.id != 0 && target_graph == nullptr)
     {
         // A tab beside the docked "Graph", as its "+" button makes, not a floating window.
         const ImGuiWindow* docked = ImGui::FindWindowByName(workspace_window_name(*tab, "Graph").c_str());
         g.dock_into = docked != nullptr && docked->DockNode != nullptr ? docked->DockNode->ID : 0;
     }
-    ImGui::SetWindowFocus(workspace_window_name(*tab, g.id == 0 ? "Graph" : std::format("Graph {}", g.id).c_str()).c_str());
-    g.view = xy ? GraphView::XY : GraphView::TimeSeries;
+    ImGui::SetWindowFocus(workspace_window_name(*tab, title(g).c_str()).c_str());
+    if (target_graph == nullptr || !view.empty())
+    {
+        g.view = xy ? GraphView::XY : GraphView::TimeSeries;
+    }
     std::string labels;
     for (const SignalEntry& e : picked)
     {
@@ -338,8 +356,8 @@ std::string graph_json(App& app, std::string_view body, int& status)
         labels += (labels.empty() ? "" : ",") + json_string(e.label);
     }
     status = 200;
-    return std::format("{{\"graph\":{},\"view\":{},\"signals\":[{}]}}", json_string(g.id == 0 ? "Graph" : std::format("Graph {}", g.id)),
-                       json_string(xy ? "xy" : "time"), labels);
+    return std::format("{{\"graph\":{},\"view\":{},\"signals\":[{}]}}", json_string(title(g)),
+                       json_string(g.view == GraphView::XY ? "xy" : "time"), labels);
 }
 
 // {"signal":"Msg.Sig","from":10,"to":20}: the tab's Value Search, brought to the front, on that

@@ -175,11 +175,25 @@ def list_signals(filter: str = "") -> dict:
 
 
 @mcp.tool()
-def open_graph(signals: list[str], view: str = "time") -> dict:
+def open_graph(signals: list[str], view: str | None = None, graph: str | None = None) -> dict:
     """Open a new graph window with these signals ("Message.Signal", or a bare signal name when only
-    one message has it). view "time": value over time; "xy": the first signal is X, the others Y.
-    An unknown name answers with the closest matches."""
-    return call("POST", "/graph", {"signals": ", ".join(signals), "view": view})
+    one message has it), or with `graph` ("Graph", "Graph 2", ...) add them to that existing window.
+    view "time" (default for a new window): value over time; "xy": the first signal is X, the others Y;
+    None keeps an existing window's view. An unknown name answers with the closest matches."""
+    return call("POST", "/graph", _some(signals=", ".join(signals), view=view, graph=graph))
+
+
+@mcp.tool()
+def graph_remove(signals: list[str], graph: str = "Graph", tab: str | None = None) -> dict:
+    """Remove signals ("Message.Signal", or a bare name: every signal of that name) from a graph window."""
+    return call("POST", "/graph/remove", _some(signals=", ".join(signals), graph=graph, tab=tab))
+
+
+@mcp.tool()
+def graph_close(graph: str, tab: str | None = None) -> dict:
+    """Close a graph window ("Graph 2", ...), as its x does. The docked "Graph" cannot be closed (409):
+    remove its signals with graph_remove instead."""
+    return call("POST", "/graph/close", _some(graph=graph, tab=tab))
 
 
 @mcp.tool()

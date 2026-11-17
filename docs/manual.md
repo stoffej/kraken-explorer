@@ -254,7 +254,7 @@ use an ssh tunnel from other hosts). Every request runs on the main thread, repl
 | `POST /setup/reload` | re-read every DBC / LDF of the setup from disk: `{"reloaded", "errors"}` (400 when one failed). Not while measuring |
 | `GET /can_status` | the CAN Status counters per interface: `state`, `rx_frames`, `rx_errors`, `tx_frames`, `tx_errors`, `rx_overruns`, `tx_dropped`, `bitrate`, `data_bitrate`, `load`, `error_frames`, `seen` (open in the last measurement) |
 | `GET /setup` | networks (interfaces, databases) and every signal (`{"name": "Message.Signal", "unit", "network"}`) |
-| `POST /graph {"signals": "Tentacle1.Angle, Tentacle1.Curl", "view": "time"}` | a new graph window in the current tab; `"view": "xy"`: the first signal is X. Names are `Message.Signal` or a signal name only one message has; an unknown one answers 400 with the closest matches |
+| `POST /graph {"signals": "Tentacle1.Angle, Tentacle1.Curl", "view": "time"}` | a new graph window in the current tab; `"view": "xy"`: the first signal is X. Names are `Message.Signal` or a signal name only one message has; an unknown one answers 400 with the closest matches. With `"graph": "Graph 2"` the signals are added to that existing window instead (its view is kept unless `view` is given) |
 | `POST /value_search {"signal": "KrakenStatus.Depth", "from": 1000, "to": 1500}` | Value Search on that signal and range (missing bound: open), brought to the front: `{"hits", "truncated", "scanning", "status"}`; an unknown name is left in its search box |
 | `POST /measurement/start`, `POST /measurement/stop` | like F5 / Shift+F5; a refused start (no interface enabled, or none opened) answers 409 with `{"error": ...}` |
 | `POST /record {"armed": true}` | arm / disarm recording (Ctrl+R) |
@@ -285,6 +285,8 @@ use an ssh tunnel from other hosts). Every request runs on the main thread, repl
 | `POST /workspace/open {"path": "/abs/w.kraken"}`, `/workspace/save {"path": ...}` | open (before the next frame, stops the measurement) / save (no path: the current file) |
 | `GET /tab`, `POST /tab/new {"title"}`, `/tab/switch`, `/tab/close {"title" or "index"}`, `/tab/rename {"title", "name"}` | workspace tabs: `{"tabs", "current", "workspace"}`; the last tab is not closed (409) |
 | `POST /graph/export {"graph": "Graph 2", "path": "/abs/g.csv"}` | a graph window to .csv (signal, unit, time_s, value) or .png (rendered after the next frame) |
+| `POST /graph/remove {"graph": "Graph 2", "signals": "Status.Depth, Rate"}` | remove signals from a graph window (`Message.Signal`, or a bare name: every signal of that name): `{"removed": [...]}`; none matched: 400 |
+| `POST /graph/close {"graph": "Graph 2"}` | close a graph window, as its x does; the docked `Graph` has none (409) |
 | `POST /convert/database {"in", "out"}`, `/convert/log {"in", "out"}`, `/convert/cancel`, `GET /convert/status` | Convert: a database at once; a log in the background (format by `out`'s extension), polled with `status` (`busy`, `read_frames`, `written`, `total`, `status`) |
 | `GET /watch`, `POST /watch/add {"signals": "Status.Depth, Rate"}`, `/watch/reset` | the tab's Watch window: `{"items": [{"signal", "has_value", "value", "min", "max", "count"}]}`; `add` opens it |
 | `GET /settings`, `POST /settings {"theme": "dark", "font_scale": 120}` | theme (`system`, `light`, `dark`) and font scale (100..175 %), applied and saved |

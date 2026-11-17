@@ -193,6 +193,31 @@ TEST_CASE("graph export, convert, watch")
     f.req("POST", "/graph/export", R"({"graph":"Graph 1","path":"/tmp/p.png"})");
     CHECK(f.app.workspace.tabs[0].graphs[0].png_path == "/tmp/p.png");
 
+    // Add to, remove from and close an existing graph window.
+    auto& graphs = f.app.workspace.tabs[0].graphs;
+    std::string added = f.req("POST", "/graph", R"({"signals":"Status.Rate","graph":"Graph 1"})");
+    CHECK(f.status == 200);
+    CHECK(has(added, "\"graph\":\"Graph 1\""));
+    REQUIRE(graphs.size() == 1); // no new window
+    CHECK(graphs[0].signals.size() == 2);
+    f.req("POST", "/graph", R"({"signals":"Status.Rate","graph":"Graph 9"})");
+    CHECK(f.status == 400);
+    f.req("POST", "/graph/remove", R"({"graph":"Graph 1","signals":"Status.Nope"})");
+    CHECK(f.status == 400);
+    added = f.req("POST", "/graph/remove", R"({"graph":"Graph 1","signals":"Depth"})");
+    CHECK(f.status == 200);
+    CHECK(has(added, R"("removed":["Status.Depth"])"));
+    REQUIRE(graphs[0].signals.size() == 1);
+    CHECK(graphs[0].signals[0].name == "Rate");
+    f.req("POST", "/graph/close", R"({"graph":"Graph"})");
+    CHECK(f.status == 400); // no docked "Graph" in this fixture
+    f.req("POST", "/graph/close", R"({"graph":"Graph 1"})");
+    CHECK(f.status == 200);
+    CHECK_FALSE(graphs[0].open);
+    graphs.emplace(graphs.begin()); // the docked "Graph" (id 0) has no close button
+    f.req("POST", "/graph/close", R"({"graph":"Graph"})");
+    CHECK(f.status == 409);
+
     f.req("POST", "/convert/database", R"({"in":"a.dbc"})");
     CHECK(f.status == 400);
     std::string body = f.req("POST", "/convert/database",
