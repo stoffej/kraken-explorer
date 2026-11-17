@@ -39,8 +39,10 @@ gives `Kraken Explorer.app` and `kraken-explorer-<version>-macos-arm64.dmg`: the
 python.org's Python.framework (stdlib without tests, tkinter and idle) and libusb, rewritten to
 `@executable_path/../Frameworks` and ad-hoc signed. `LSMinimumSystemVersion` is the newest minimum
 of anything bundled: Homebrew builds libusb for the newest macOS only (26 today);
-`LIBUSB_DYLIB=<path>` bundles another one. CI builds the DMG and attaches it to the release with
-the other packages.
+`LIBUSB_DYLIB=<path>` bundles another one. CI retries the macOS build up to 20 times and uploads
+the Linux and Windows packages to a draft release first. It attaches the DMG and publishes the
+release only after the macOS build succeeds; if macOS exhausts its retries, the draft remains
+available with the other packages attached.
 
 The app is not notarized: on first start macOS refuses it, **System Settings › Privacy & Security
 › Open Anyway** allows it once. PEAK adapters need MacCAN's

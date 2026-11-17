@@ -329,31 +329,45 @@ jobs:
     - *ccache
 
     # No vcan on macOS: the SocketCAN tests are compiled out, the rest runs as on Linux.
-    - name: Configure
-      run: cmake -S . -B build -G Ninja -DKRAKEN_SANITIZE=ON -DPython_ROOT_DIR="$PYTHON_FRAMEWORK" ${{ env.CCACHE_ARGS }}
-
-    - name: Build
-      run: cmake --build build && ccache -s
-
-    - name: Run tests
-      run: ctest --test-dir build --output-on-failure
-
-    # Homebrew's libusb is built for this runner's macOS only and would raise the bundle's
-    # LSMinimumSystemVersion to it (26.0): the bundle ships one built for the deployment target.
-    - name: libusb for the deployment target
-      run: |
-        curl -fsSL -o libusb.tar.bz2 https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
-        mkdir libusb-src && tar -xjf libusb.tar.bz2 -C libusb-src --strip-components 1
-        cd libusb-src
-        export MACOSX_DEPLOYMENT_TARGET=13.3 # read by clang at compile and link time, so for make too
-        ./configure --prefix="$PWD/out" --disable-static >/dev/null
-        make -j3 install >/dev/null
-        echo "LIBUSB_DYLIB=$PWD/out/lib/libusb-1.0.0.dylib" >> "$GITHUB_ENV"
-
-    - name: Build app bundle and DMG
+    - name: Build, test, and package macOS (up to 20 attempts)
       env:
         CMAKE_ARGS: ${{ env.CCACHE_ARGS }}
-      run: scripts/build_macos_app.sh build/macos
+      run: |
+        attempt=1
+        max_attempts=20
+        while true; do
+          echo "macOS build attempt $attempt/$max_attempts"
+          if bash -e <<'ATTEMPT'
+        cmake -S . -B build -G Ninja -DKRAKEN_SANITIZE=ON -DPython_ROOT_DIR="$PYTHON_FRAMEWORK" ${{ env.CCACHE_ARGS }}
+        cmake --build build
+        ctest --test-dir build --output-on-failure
+
+        # Homebrew's libusb is built for this runner's macOS only and would raise the bundle's
+        # LSMinimumSystemVersion to it (26.0): the bundle ships one built for the deployment target.
+        curl -fsSL -o libusb.tar.bz2 https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
+        rm -rf libusb-src
+        mkdir libusb-src
+        tar -xjf libusb.tar.bz2 -C libusb-src --strip-components 1
+        cd libusb-src
+        export MACOSX_DEPLOYMENT_TARGET=13.3
+        ./configure --prefix="$PWD/out" --disable-static >/dev/null
+        make -j3 install >/dev/null
+        cd ..
+        export LIBUSB_DYLIB="$PWD/libusb-src/out/lib/libusb-1.0.0.dylib"
+        scripts/build_macos_app.sh build/macos
+        ccache -s
+        ATTEMPT
+          then
+            break
+          fi
+
+          if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "macOS build failed after $max_attempts attempts" >&2
+            exit 1
+          fi
+          attempt=$((attempt + 1))
+          sleep 10
+        done
 
     # No smoke run of the bundle: GitHub's macOS VMs have no OpenGL (GLFW gets no accelerated
     # pixel format). scripts/build_macos_app.sh verifies the signature; run the .app on a Mac.
@@ -370,7 +384,7 @@ jobs:
   release:
     name: Release
     if: github.ref_type == 'tag' || inputs.draft_release
-    needs: [unit-tests, format-compat, package, windows, macos]
+    needs: [unit-tests, format-compat, package, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -381,16 +395,29 @@ jobs:
       with:
         fetch-depth: 0  # git describe: the version is the newest tag
 
-    - name: Download packages
+    - name: Download Linux and Windows packages
       uses: actions/download-artifact@v7
       with:
+        name: KrakenExplorer-Linux-DEB
         path: dist
-        pattern: KrakenExplorer-*
-        merge-multiple: true
 
-    # A new release starts as a draft so every package is attached before it goes public
-    # (required once a release is immutable). An existing release for the tag, draft or
-    # published, gets this run's packages.
+    - uses: actions/download-artifact@v7
+      with:
+        name: KrakenExplorer-Linux-AppImage
+        path: dist
+
+    - uses: actions/download-artifact@v7
+      with:
+        name: KrakenExplorer-Windows-zip
+        path: dist
+
+    - uses: actions/download-artifact@v7
+      with:
+        name: KrakenExplorer-Windows-setup
+        path: dist
+
+    # Keep the release as a draft until the macOS package is attached. This also supports
+    # immutable releases, which cannot accept assets after publication.
     - name: Create or update release
       env:
         GH_TOKEN: ${{ github.token }}
@@ -398,7 +425,6 @@ jobs:
         # The version is the tag the packages were built from (top-level CMakeLists.txt).
         VERSION=$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*")
         TAG="$VERSION"
-        echo "TAG=$TAG" >> "$GITHUB_ENV"
         ls -la dist
         if gh release view "$TAG" >/dev/null 2>&1; then
           gh release upload "$TAG" dist/* --clobber
@@ -406,13 +432,33 @@ jobs:
           gh release create "$TAG" dist/* --draft --generate-notes --target "$GITHUB_SHA" --title "Kraken Explorer $VERSION"
         fi
 
-    # Tag builds publish after every package has been uploaded. A manual branch run only
-    # refreshes packages and leaves any draft unpublished.
-    - name: Publish release
-      if: github.ref_type == 'tag'
+  release-macos:
+    name: Attach macOS DMG
+    if: github.ref_type == 'tag' || inputs.draft_release
+    needs: [macos, release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Download macOS package
+      uses: actions/download-artifact@v7
+      with:
+        name: KrakenExplorer-macOS-dmg
+        path: dist
+
+    - name: Attach macOS package to release
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+        TAG=$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*")
+        ls -la dist
+        gh release upload "$TAG" dist/* --clobber
+        if [ "${{ github.ref_type }}" = "tag" ] && [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
           gh release edit "$TAG" --draft=false
         fi
