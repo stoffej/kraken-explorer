@@ -742,7 +742,7 @@ PYBIND11_EMBEDDED_MODULE(kraken, m)
             else
             {
                 found = uds_scan(g_app->uds_client, python_uds_send, interface_id,
-                                 w.count() ? w : std::chrono::milliseconds(300));
+                                 w.count() ? w : std::chrono::milliseconds(300), {}, tester);
             }
         }
         for (const UdsEcu& e : found)
@@ -750,12 +750,12 @@ PYBIND11_EMBEDDED_MODULE(kraken, m)
             out.push_back(ecu_dict(e));
         }
         return out;
-    }, "Find ECUs. Default: functional TesterPresent to 0x7DF and 0x18DB33F1. physical=True instead "
+    }, "Find ECUs. Default: functional TesterPresent to 0x7DF and 0x18DB33<tester>. physical=True instead "
        "sweeps every physical id (11-bit first..last, or 29-bit 0x18DA<node><tester> for each candidate "
        "node, empty = all 256). One dict per ECU: tx_id, rx_id, extended, guessed.",
        py::arg("interface_id") = py::none(), py::arg("physical") = py::none(), py::arg("extended") = py::none(),
        py::arg("first") = 0x700, py::arg("last") = 0x7FF, py::arg("candidates") = std::vector<uint8_t>{},
-       py::arg("tester") = 0xF1, py::arg("wait") = 0.0);
+       py::arg("tester") = 0xF2, py::arg("wait") = 0.0);
 
     m.def("uds_service_scan", [uds_target](uint32_t tx_id, uint32_t rx_id, bool extended,
                                            std::optional<uint16_t> iface_arg, double timeout)

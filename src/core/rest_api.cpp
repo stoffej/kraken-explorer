@@ -602,7 +602,9 @@ std::string uds_json(App& app, std::string_view path, std::string_view body, int
         }
         else
         {
-            ecus = uds_scan(app.uds_client, send, static_cast<uint16_t>(index), std::chrono::milliseconds(300));
+            const auto te = json_id(json_get(body, "tester"));
+            ecus = uds_scan(app.uds_client, send, static_cast<uint16_t>(index), std::chrono::milliseconds(300), {},
+                            te ? static_cast<uint8_t>(*te) : uint8_t{0xF2});
         }
         std::string out;
         for (const UdsEcu& ecu : ecus)

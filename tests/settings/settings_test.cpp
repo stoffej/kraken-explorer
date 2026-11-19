@@ -90,6 +90,7 @@ TEST_CASE("UDS transport and named ECUs round trip")
     a.uds.tx_len_idx = 7;
     a.uds.padding = "AA";
     a.uds.p2 = "2000";
+    a.uds.tester = "F5";
     uds_learner_add(a.uds.learner, {.iface = 0, .extended = true, .tx_id = 0x18DA10F1, .rx_id = 0x18DAF110, .name = "PCU"});
     uds_learner_add(a.uds.learner, {.iface = 0, .tx_id = 0x7E0, .rx_id = 0x7E8}); // unnamed: not persisted
     std::string ini;
@@ -111,6 +112,7 @@ TEST_CASE("UDS transport and named ECUs round trip")
     CHECK(b.uds.tx_len_idx == 7);
     CHECK(b.uds.padding == "AA");
     CHECK(b.uds.p2 == "2000");
+    CHECK(b.uds.tester == "F5");
     REQUIRE(b.uds.learner.ecus.size() == 1);
     CHECK(b.uds.learner.ecus[0].name == "PCU");
     CHECK(b.uds.learner.ecus[0].tx_id == 0x18DA10F1);

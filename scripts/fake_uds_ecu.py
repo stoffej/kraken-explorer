@@ -2,7 +2,7 @@
 # Fake UDS ECUs on a SocketCAN interface (stdlib only), to try the UDS Diagnostics window, the
 # Python API (kraken.uds_request / uds_scan) and the REST routes without hardware:
 #   scripts/setup_vcan.sh && python3 scripts/fake_uds_ecu.py vcan1   # the gateway mirrors to vcan0
-# ECUs: 11-bit 7E0/7E8 "ENGINE", 7E1/7E9 "GEARBOX"; 29-bit 18DA10F1/18DAF110 "BODY". They answer
+# ECUs: 11-bit 7E0/7E8 "ENGINE", 7E1/7E9 "GEARBOX"; 29-bit 18DA10F2/18DAF210 "BODY". They answer
 # TesterPresent, sessions, reset, DTC read/clear (two DTCs), DID F190 (VIN, writable) and F197
 # (name), RoutineControl with a "response pending" first; long requests and answers go segmented.
 import socket, struct, sys, time
@@ -15,7 +15,7 @@ s.bind((IFACE,))
 ECUS = {  # request id -> (response id, extended, name)
     0x7E0: (0x7E8, False, "ENGINE"),
     0x7E1: (0x7E9, False, "GEARBOX"),
-    0x18DA10F1: (0x18DAF110, True, "BODY"),
+    0x18DA10F2: (0x18DAF210, True, "BODY"),
 }
 dids = {0xF190: b"WKRAKEN0123456789"}
 
@@ -76,7 +76,7 @@ while True:
     cid, ext, d = f
     targets = []
     if (cid, ext) in [(0x7DF, False)]: targets = [k for k, v in ECUS.items() if not v[1]]
-    elif (cid, ext) == (0x18DB33F1, True): targets = [k for k, v in ECUS.items() if v[1]]
+    elif (cid, ext) == (0x18DB33F2, True): targets = [k for k, v in ECUS.items() if v[1]]
     elif cid in ECUS and ECUS[cid][1] == ext: targets = [cid]
     if not targets: continue
     pci = d[0] >> 4

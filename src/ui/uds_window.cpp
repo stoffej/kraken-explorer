@@ -280,11 +280,12 @@ void scan(App& app, UdsWindow& w, uint16_t iface)
     const UdsTiming timing = timing_of(w);
     UdsTarget transport;
     apply_transport(transport, w);
-    post(app, w, [&app, &w, iface, transport]
+    const uint8_t tester = parse_u8_hex(w.tester).value_or(0xF2);
+    post(app, w, [&app, &w, iface, transport, tester]
     {
         const auto send = [&app](const BusMessage& m) { return uds_send(app, m); };
-        log_line(app, w, "scan: 7DF and 18DB33F1 >> 3E 00");
-        std::vector<UdsEcu> found = uds_scan(app.uds_client, send, iface, scan_window, transport);
+        log_line(app, w, std::format("scan: 7DF and 18DB33{:02X} >> 3E 00", tester));
+        std::vector<UdsEcu> found = uds_scan(app.uds_client, send, iface, scan_window, transport, tester);
         const UdsTiming quick{.p2 = std::chrono::milliseconds(300), .p2_star = std::chrono::milliseconds(2000)};
         for (UdsEcu& e : found)
         {
@@ -1005,7 +1006,13 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
     {
         scan(app, w, iface);
     }
-    ImGui::SetItemTooltip("TesterPresent to 0x7DF and 0x18DB33F1; every ECU that answers is added and named");
+    ImGui::SetItemTooltip("TesterPresent to 0x7DF and 0x18DB33<tester>; every ECU that answers is added and named");
+    ImGui::SameLine();
+    ImGui::TextUnformatted("tester");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(em * 3.0f);
+    ImGui::InputText("##tester", &w.tester, ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::SetItemTooltip("29-bit tester address of Functional and Sweep 29-bit (0x18DA<node><tester>)");
     ImGui::SameLine();
     if (ImGui::Button("Sweep 11-bit"))
     {
@@ -1031,7 +1038,7 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
         UdsSweep s;
         s.transport = {.iface = iface, .extended = true};
         apply_transport(s.transport, w);
-        s.tester = parse_u8_hex(w.sweep_tester).value_or(0xF1);
+        s.tester = parse_u8_hex(w.tester).value_or(0xF2);
         s.wait = std::chrono::milliseconds(parse_int(w.sweep_wait, 40));
         if (w.sweep_j1939)
         {
@@ -1040,11 +1047,6 @@ void draw_scan_tab(App& app, UdsWindow& w, bool busy)
         run_sweep(app, w, std::move(s));
     }
     ImGui::SetItemTooltip("Requests 18DA<node><tester> for each candidate node address");
-    ImGui::SameLine();
-    ImGui::TextUnformatted("tester");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(em * 3.0f);
-    ImGui::InputText("##swtester", &w.sweep_tester, ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::SameLine();
     ImGui::Checkbox("J1939 nodes only", &w.sweep_j1939);
     ImGui::SetItemTooltip(w.learner.j1939_sources.empty()

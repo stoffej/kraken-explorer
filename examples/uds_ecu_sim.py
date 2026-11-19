@@ -5,7 +5,7 @@
 # without real hardware. Uses the stdlib AF_CAN socket (no python-can needed). Linux only.
 #
 #   scripts/setup_vcan.sh                       # makes vcan0
-#   examples/uds_ecu_sim.py --iface vcan0 --ecus 7E0:7E8,7E1:7E9,18DA10F1:18DAF110
+#   examples/uds_ecu_sim.py --iface vcan0 --ecus 7E0:7E8,7E1:7E9,18DA10F2:18DAF210
 #   examples/uds_ecu_sim.py --iface vcan0 --fd --ae 0x10 --ecus 7E0:7E8
 #
 # Each ECU answers 10/11/14/19/22/23/27/28/2E/2F/31/3D/3E/85 with plausible data, NRC 0x11 for

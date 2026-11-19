@@ -549,7 +549,7 @@ std::vector<UdsResponder> uds_functional(UdsClient& c, const UdsSend& send, cons
 }
 
 std::vector<UdsEcu> uds_scan(UdsClient& c, const UdsSend& send, uint16_t iface, std::chrono::milliseconds window,
-                             const UdsTarget& transport)
+                             const UdsTarget& transport, uint8_t tester)
 {
     std::vector<UdsEcu> found;
     const std::array<uint8_t, 2> tester_present = {0x3E, 0x00};
@@ -557,7 +557,7 @@ std::vector<UdsEcu> uds_scan(UdsClient& c, const UdsSend& send, uint16_t iface, 
     {
         UdsTarget t = transport;
         t.iface = iface;
-        t.tx_id = ext ? 0x18DB33F1u : 0x7DFu;
+        t.tx_id = ext ? (0x18DB3300u | tester) : 0x7DFu;
         t.extended = ext;
         for (const UdsResponder& r : uds_functional(c, send, t, tester_present, window))
         {

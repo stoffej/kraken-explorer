@@ -86,7 +86,7 @@ struct UdsWindow
     // Scan tab fields.
     std::string sweep_first = "700";
     std::string sweep_last = "7FF";
-    std::string sweep_tester = "F1";
+    std::string tester = "F2";   // 29-bit tester address of Functional and Sweep 29-bit, persisted
     std::string sweep_wait = "40";
     bool sweep_j1939 = true;     // 29-bit sweep uses the J1939 source addresses seen on the bus
     std::string did_first = "F180";

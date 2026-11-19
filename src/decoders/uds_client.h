@@ -49,7 +49,7 @@
 struct UdsTarget
 {
     uint16_t iface = 0;
-    uint32_t tx_id = 0x7E0; // request id: physical, or functional (0x7DF, 0x18DB33F1; single-frame answers only)
+    uint32_t tx_id = 0x7E0; // request id: physical, or functional (0x7DF, 0x18DB33F2; single-frame answers only)
     uint32_t rx_id = 0x7E8; // response id
     bool extended = false;  // 29-bit ids
     uint8_t padding = 0xCC; // fills every frame to 8 bytes (FD: to the next DLC step)
@@ -117,10 +117,11 @@ struct UdsResponder
                                                        std::span<const uint8_t> request,
                                                        std::chrono::milliseconds window);
 
-// Functional TesterPresent on 11-bit (0x7DF) and 29-bit (0x18DB33F1), every ECU that answers
+// Functional TesterPresent on 11-bit (0x7DF) and 29-bit (0x18DB33<tester>), every ECU that answers
 // within window, by uds_ecu_from_responder. transport lends padding, fd, brs, tx_len, tx_ae, rx_ae.
 [[nodiscard]] std::vector<struct UdsEcu> uds_scan(UdsClient& c, const UdsSend& send, uint16_t iface,
-                                                   std::chrono::milliseconds window, const UdsTarget& transport = {});
+                                                   std::chrono::milliseconds window, const UdsTarget& transport = {},
+                                                   uint8_t tester = 0xF2);
 
 // --- Probing ---
 
@@ -132,7 +133,7 @@ struct UdsSweep
     UdsTarget transport;                  // iface, extended, padding, fd, brs, tx_len, tx_ae, rx_ae; the ids come from below
     uint32_t first = 0x700;               // 11-bit request ids tried, first..last
     uint32_t last = 0x7FF;
-    uint8_t tester = 0xF1;                // 29-bit: requests go to 0x18DA<SA><tester>
+    uint8_t tester = 0xF2;                // 29-bit: requests go to 0x18DA<SA><tester>
     std::vector<uint8_t> candidates;      // 29-bit: SAs tried; empty = all 256
     std::vector<uint8_t> request = {0x3E, 0x00}; // one single frame
     std::chrono::milliseconds wait{50};   // answers are collected this long after each request

@@ -66,6 +66,7 @@ void settings_ini_write(const App& app, std::string& out)
     line("uds/padding", app.uds.padding);
     line("uds/p2", app.uds.p2);
     line("uds/p2star", app.uds.p2_star);
+    line("uds/tester", app.uds.tester);
     for (const UdsEcu& e : app.uds.learner.ecus)
     {
         if (!e.name.empty()) // only the ones the user named are worth keeping
@@ -158,6 +159,10 @@ void settings_ini_read_line(App& app, std::string_view line)
     else if (key == "uds/p2star")
     {
         app.uds.p2_star = value;
+    }
+    else if (key == "uds/tester")
+    {
+        app.uds.tester = value;
     }
     else if (key == "uds/ecu")
     {

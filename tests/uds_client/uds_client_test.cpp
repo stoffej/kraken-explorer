@@ -233,6 +233,23 @@ TEST_CASE("functional request collects every answering ECU once")
     CHECK(!body.guessed);
 }
 
+TEST_CASE("functional scan sends from the tester address and keeps only its answers")
+{
+    Ecu ecu;
+    ecu.on_frame = [](Ecu& e, const BusMessage& m)
+    {
+        if (m.id == 0x18DB33F5)
+        {
+            e.reply(0x18DAF510, {0x02, 0x7E, 0x00}, true);
+            e.reply(0x18DAF111, {0x02, 0x7E, 0x00}, true); // another tester's answer
+        }
+    };
+    const auto found = uds_scan(ecu.client, ecu.send(), 0, std::chrono::milliseconds(30), {}, 0xF5);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].tx_id == 0x18DA10F5);
+    CHECK(found[0].rx_id == 0x18DAF510);
+}
+
 TEST_CASE("a functional request refuses a multi-frame answer, cancel ends a wait")
 {
     Ecu ecu;
@@ -391,11 +408,11 @@ TEST_CASE("29-bit sweep ignores J1939 traffic and answers to other testers")
     Ecu ecu;
     ecu.on_frame = [](Ecu& e, const BusMessage& m)
     {
-        if (m.id == 0x18DA10F1)
+        if (m.id == 0x18DA10F2)
         {
             e.reply(0x18FEF100, {0x02, 0x7E, 0x00}, true); // J1939 PGN FEF1, looks like a UDS answer
-            e.reply(0x18DAF210, {0x02, 0x7E, 0x00}, true); // answer to tester F2, not us
-            e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true); // the real one
+            e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true); // answer to tester F1, not us
+            e.reply(0x18DAF210, {0x02, 0x7E, 0x00}, true); // the real one
         }
     };
     UdsSweep sw;
@@ -404,8 +421,8 @@ TEST_CASE("29-bit sweep ignores J1939 traffic and answers to other testers")
     sw.wait = std::chrono::milliseconds(20);
     const auto found = uds_sweep(ecu.client, ecu.send(), sw);
     REQUIRE(found.size() == 1);
-    CHECK(found[0].rx_id == 0x18DAF110);
-    CHECK(found[0].tx_id == 0x18DA10F1);
+    CHECK(found[0].rx_id == 0x18DAF210);
+    CHECK(found[0].tx_id == 0x18DA10F2);
 }
 
 TEST_CASE("sweep: 11-bit range finds nodes, stop ends it, 29-bit is exact")
@@ -432,7 +449,7 @@ TEST_CASE("sweep: 11-bit range finds nodes, stop ends it, 29-bit is exact")
     ecu.on_frame = [](Ecu& e, const BusMessage& m)
     {
         // Only a proper single frame (PCI 02, then 3E 00) is answered.
-        if (m.id == 0x18DA10F1 && m.data[0] == 0x02 && m.data[1] == 0x3E) e.reply(0x18DAF110, {0x02, 0x7E, 0x00}, true);
+        if (m.id == 0x18DA10F2 && m.data[0] == 0x02 && m.data[1] == 0x3E) e.reply(0x18DAF210, {0x02, 0x7E, 0x00}, true);
     };
     UdsSweep sw29;
     sw29.transport.extended = true;
@@ -440,8 +457,8 @@ TEST_CASE("sweep: 11-bit range finds nodes, stop ends it, 29-bit is exact")
     sw29.wait = std::chrono::milliseconds(20);
     const auto f29 = uds_sweep(ecu.client, ecu.send(), sw29);
     REQUIRE(f29.size() == 1);
-    CHECK(f29[0].tx_id == 0x18DA10F1);
-    CHECK(f29[0].rx_id == 0x18DAF110);
+    CHECK(f29[0].tx_id == 0x18DA10F2);
+    CHECK(f29[0].rx_id == 0x18DAF210);
     CHECK(!f29[0].guessed);
 
     std::atomic<bool> stop{true};

@@ -311,9 +311,10 @@ def uds_security_access(iface: str, tx: str, rx: str, level: int = 1, key: str =
 
 @mcp.tool()
 def uds_scan(iface: str, physical: bool = False, first: str = "0x700", last: str = "0x7FF",
-             extended: bool = False, tester: str = "0xF1") -> dict:
+             extended: bool = False, tester: str = "0xF2") -> dict:
     """Find ECUs: a functional TesterPresent on 11 and 29 bit (default), or with physical=true a
-    sweep of request ids first..last (29-bit normal fixed with extended=true, tester address `tester`).
+    sweep of request ids first..last (29-bit normal fixed with extended=true). `tester`: the 29-bit tester
+    address of both (functional 0x18DB33<tester>, sweep 0x18DA<node><tester>).
     Returns tx / rx id pairs; guessed=true means rx was taken as tx + 8."""
     body = {"iface": iface, "physical": physical, "first": first, "last": last, "extended": extended, "tester": tester}
     return call("POST", "/uds/scan", body)
